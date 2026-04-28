@@ -1,0 +1,386 @@
+"""
+Carousel Generator - orchestrator pelnego pipeline'u:
+  1) Copywriter (Claude) -> JSON ze slajdami (headline, body, image_prompt)
+  2) Image Router -> generuje obraz tla per slajd (z reference images stylu)
+  3) Pillow overlay -> nakłada polski tekst na finalny obraz
+  4) Walidacja vs brief -> blokuje halucynacje/forbidden claims
+  5) Save do bazy + plikow
+"""
+import io
+import json
+from pathlib import Path
+from typing import Optional
+
+from PIL import Image, ImageDraw, ImageFont
+
+from config import (
+    PROMPTS_DIR, CAROUSELS_DIR,
+    SLIDE_WIDTH, SLIDE_HEIGHT,
+    SLIDE_FONT_HEADLINE, SLIDE_FONT_BODY,
+    SLIDE_TEXT_COLOR, SLIDE_TEXT_STROKE, SLIDE_TEXT_STROKE_WIDTH,
+    DEFAULT_SLIDES, MIN_SLIDES, MAX_SLIDES,
+)
+from core.llm import call_claude_json, validate_against_brief
+from core.image_router import generate_image, QuotaExhausted, ImageGenerationError
+from core.utils import (
+    generate_id, ensure_dir, write_image_bytes, hex_to_rgb,
+    wrap_text_for_slide, sanitize_filename,
+)
+from db import create_carousel, update_carousel, get_brief, get_style
+
+
+# ─────────────────────────────────────────────────────────────
+# STEP 1: COPYWRITER
+# ─────────────────────────────────────────────────────────────
+
+def _load_copy_prompt() -> str:
+    return (PROMPTS_DIR / "carousel_copy.md").read_text(encoding="utf-8")
+
+
+def generate_copy(
+    topic: str,
+    brief: dict,
+    style: Optional[dict] = None,
+    slide_count: int = DEFAULT_SLIDES,
+) -> dict:
+    """
+    Generuje cala karuzele tekstowa (slides + caption + hashtags).
+    """
+    slide_count = max(MIN_SLIDES, min(MAX_SLIDES, slide_count))
+    system_prompt = _load_copy_prompt()
+
+    style_section = ""
+    if style:
+        hooks = style.get("hook_formulas") or []
+        style_section = f"""
+
+STYL VISUAL (do inspiracji hookow i tonu):
+- Hook formulas wzorce: {json.dumps(hooks, ensure_ascii=False)}
+- Mood: {style.get('mood', '')}
+- Image style (do image_prompt kazdego slajdu): {style.get('image_style', '')}
+"""
+
+    prompt = f"""Stworz MAKSYMALNIE WIRALOWA karuzele Instagram/TikTok na temat:
+"{topic}"
+
+PARAMETRY:
+- Liczba slajdow: {slide_count} (dokladnie tyle)
+- Jezyk: polski (z poprawnymi znakami diakrytycznymi)
+
+BRIEF MARKI:
+{json.dumps(brief, ensure_ascii=False, indent=2)}
+{style_section}
+
+WAZNE:
+- Uzywaj WYLACZNIE USPs i ofert z briefa - nie wymyslaj nowych cech produktu
+- Trzymaj sie voice_tone z briefa
+- Mow do glownego avatara z briefa
+- W ostatnim slajdzie (CTA) uzyj cta_url z briefa
+- Forbidden claims sa ZAKAZANE: {json.dumps(brief.get('forbidden_claims', []), ensure_ascii=False)}
+
+Zwroc JSON zgodny ze schematem opisanym w system promptcie. TYLKO JSON.
+"""
+    return call_claude_json(prompt, system=system_prompt, max_tokens=6000)
+
+
+# ─────────────────────────────────────────────────────────────
+# STEP 2: IMAGE GENERATION + STEP 3: PILLOW OVERLAY
+# ─────────────────────────────────────────────────────────────
+
+def render_slide_image(
+    slide: dict,
+    style: Optional[dict],
+    output_path: Path,
+) -> dict:
+    """
+    Generuje obraz tla + naklada tekst Pillow.
+    Zwraca {"image_path": ..., "image_provider": ..., "image_model": ...}
+    """
+    image_prompt = slide.get("image_prompt", "")
+    headline = slide.get("headline", "")
+    body = slide.get("body", "")
+    image_focus = slide.get("image_focus", "center")
+
+    # Buduj style hint z stylu
+    style_hint = ""
+    refs = []
+    if style:
+        style_hint = ". ".join(filter(None, [
+            style.get("image_style", ""),
+            style.get("composition_notes", ""),
+            f"palette: {', '.join(style.get('palette', [])[:5])}" if style.get("palette") else "",
+            f"mood: {style.get('mood', '')}" if style.get("mood") else "",
+        ]))
+        refs = list(style.get("reference_image_paths") or [])
+
+    # Generuj tlo
+    try:
+        result = generate_image(
+            prompt=image_prompt or f"Background for social media carousel slide about: {headline}",
+            reference_images=refs[:4],   # max 4 refs zeby zaoszczedzic
+            size=(SLIDE_WIDTH, SLIDE_HEIGHT),
+            style_hint=style_hint,
+        )
+    except (QuotaExhausted, ImageGenerationError) as e:
+        # Phase 1 fallback: solidne tło z palety (gdy brak generatora)
+        result = {
+            "image_bytes": _solid_background_with_palette(style),
+            "provider": "fallback",
+            "model": "solid_color",
+            "cost_usd": 0.0,
+        }
+
+    # Otworz w Pillow i nakladaj tekst
+    img = Image.open(io.BytesIO(result["image_bytes"])).convert("RGB")
+    img = img.resize((SLIDE_WIDTH, SLIDE_HEIGHT), Image.LANCZOS)
+    img = _overlay_text(img, headline, body, image_focus, style)
+
+    # Zapis
+    ensure_dir(output_path.parent)
+    img.save(output_path, "JPEG", quality=92)
+
+    return {
+        "image_path": str(output_path),
+        "image_provider": result["provider"],
+        "image_model": result["model"],
+        "cost_usd": result["cost_usd"],
+    }
+
+
+def _overlay_text(img: Image.Image, headline: str, body: str,
+                    focus: str, style: Optional[dict]) -> Image.Image:
+    """
+    Naklada polski tekst (headline + body) na obraz.
+    Pozycja zalezy od `focus`: 'top' = naglowek u gory, body pod nim.
+                                'bottom' = na dole.
+                                'center' = srodek.
+    """
+    if not headline and not body:
+        return img
+
+    draw = ImageDraw.Draw(img)
+    W, H = img.size
+
+    # Wybor czcionek - rozmiary zalezne od dlugosci tekstu
+    headline_lines = wrap_text_for_slide(headline.upper() if headline else "", max_chars_per_line=18)
+    body_lines = wrap_text_for_slide(body or "", max_chars_per_line=32)
+
+    head_size = _pick_font_size(headline_lines, max_size=110, min_size=64)
+    body_size = _pick_font_size(body_lines, max_size=44, min_size=28)
+
+    head_font = _load_font(SLIDE_FONT_HEADLINE, head_size)
+    body_font = _load_font(SLIDE_FONT_BODY, body_size)
+
+    # Oblicz wysokosc bloku
+    head_h = sum(_text_height(l, head_font) for l in headline_lines) + 8 * max(0, len(headline_lines) - 1)
+    body_h = sum(_text_height(l, body_font) for l in body_lines) + 6 * max(0, len(body_lines) - 1)
+    gap = 30 if headline_lines and body_lines else 0
+    total_h = head_h + gap + body_h
+
+    # Pozycja Y bloku
+    if focus == "top":
+        y_start = int(H * 0.08)
+    elif focus == "bottom":
+        y_start = H - total_h - int(H * 0.08)
+    else:
+        y_start = (H - total_h) // 2
+
+    # Tlo pod tekstem - przyciemnione zeby tekst byl czytelny
+    pad = 30
+    box_top = max(0, y_start - pad)
+    box_bot = min(H, y_start + total_h + pad)
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    odraw = ImageDraw.Draw(overlay)
+    odraw.rectangle([0, box_top, W, box_bot], fill=(0, 0, 0, 100))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    # Render headline
+    y = y_start
+    for line in headline_lines:
+        x = (W - _text_width(line, head_font)) // 2
+        draw.text((x, y), line, font=head_font, fill=SLIDE_TEXT_COLOR,
+                   stroke_width=SLIDE_TEXT_STROKE_WIDTH, stroke_fill=SLIDE_TEXT_STROKE)
+        y += _text_height(line, head_font) + 8
+
+    if headline_lines and body_lines:
+        y += gap
+
+    # Render body
+    for line in body_lines:
+        x = (W - _text_width(line, body_font)) // 2
+        draw.text((x, y), line, font=body_font, fill=SLIDE_TEXT_COLOR,
+                   stroke_width=2, stroke_fill=SLIDE_TEXT_STROKE)
+        y += _text_height(line, body_font) + 6
+
+    return img
+
+
+def _load_font(path: str, size: int):
+    try:
+        return ImageFont.truetype(path, size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _pick_font_size(lines: list[str], max_size: int, min_size: int) -> int:
+    if not lines:
+        return min_size
+    longest = max(len(l) for l in lines)
+    if longest <= 12:
+        return max_size
+    if longest <= 18:
+        return int(max_size * 0.85)
+    if longest <= 24:
+        return int(max_size * 0.7)
+    return min_size
+
+
+def _text_width(text: str, font) -> int:
+    bbox = font.getbbox(text)
+    return bbox[2] - bbox[0]
+
+
+def _text_height(text: str, font) -> int:
+    bbox = font.getbbox(text)
+    return bbox[3] - bbox[1]
+
+
+def _solid_background_with_palette(style: Optional[dict]) -> bytes:
+    """Fallback gdy generator obrazow padl - solidny kolor z palety stylu."""
+    palette = (style or {}).get("palette") or ["#1a1a2e"]
+    color = palette[0] if isinstance(palette, list) and palette else "#1a1a2e"
+    rgb = hex_to_rgb(color)
+    img = Image.new("RGB", (SLIDE_WIDTH, SLIDE_HEIGHT), rgb)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+# ─────────────────────────────────────────────────────────────
+# GLOWNY ENTRY: GENERATE FULL CAROUSEL
+# ─────────────────────────────────────────────────────────────
+
+def generate_carousel(
+    brand_id: str,
+    topic: str,
+    style_id: Optional[str] = None,
+    topic_id: Optional[str] = None,
+    slide_count: int = DEFAULT_SLIDES,
+    progress_callback=None,
+) -> dict:
+    """
+    Pelny pipeline:
+      1. Czyta brief + styl z bazy
+      2. Generuje copy (Claude)
+      3. Walidacja vs brief
+      4. Per slajd: generuje obraz + naklada tekst
+      5. Zapis do bazy + dysk
+
+    progress_callback(stage: str, pct: float) - opcjonalny dla UI.
+
+    Zwraca: dict z carouselem (taki sam jak db.get_carousel)
+    """
+    brief = get_brief(brand_id) or {}
+    style = get_style(style_id) if style_id else None
+
+    if progress_callback:
+        progress_callback("Generuje tekst karuzeli...", 0.1)
+
+    copy_data = generate_copy(topic, brief, style, slide_count)
+
+    if progress_callback:
+        progress_callback("Walidacja zgodnosci z briefem...", 0.25)
+
+    # Walidacja
+    validation = validate_against_brief(copy_data.get("slides", []), brief)
+    if not validation.get("ok", True):
+        violations = validation.get("violations", [])
+        raise ValueError(
+            f"Tresc lamie brief - {len(violations)} naruszen: " +
+            "; ".join(f"slajd {v.get('slide')}: {v.get('issue')}" for v in violations[:3])
+        )
+
+    # Stworz wpis carousel w bazie (placeholder, slides z paths uzupelniamy nizej)
+    carousel_id = generate_id("car")
+    carousel_dir = CAROUSELS_DIR / brand_id / carousel_id
+    ensure_dir(carousel_dir)
+
+    slides_with_images = []
+    n = len(copy_data.get("slides", []))
+
+    for i, slide in enumerate(copy_data["slides"]):
+        if progress_callback:
+            progress_callback(
+                f"Generuje slajd {i+1}/{n}...",
+                0.3 + 0.6 * (i / max(n, 1))
+            )
+
+        slide_filename = f"{i+1:02d}_{sanitize_filename(slide.get('headline', 'slide'))}.jpg"
+        slide_path = carousel_dir / slide_filename
+        try:
+            img_meta = render_slide_image(slide, style, slide_path)
+        except Exception as e:
+            img_meta = {
+                "image_path": "",
+                "image_provider": "error",
+                "image_model": str(e)[:80],
+                "cost_usd": 0.0,
+            }
+
+        slides_with_images.append({
+            **slide,
+            "image_path": img_meta["image_path"],
+            "image_provider": img_meta["image_provider"],
+            "image_model": img_meta["image_model"],
+        })
+
+    if progress_callback:
+        progress_callback("Zapisuje karuzele...", 0.95)
+
+    # Zapis caption + hashtags do pliku
+    caption_path = carousel_dir / "caption.txt"
+    caption_text = (copy_data.get("caption", "") + "\n\n" +
+                    " ".join(copy_data.get("hashtags", [])))
+    caption_path.write_text(caption_text, encoding="utf-8")
+
+    # Zapis do DB
+    create_carousel(
+        carousel_id=carousel_id,
+        brand_id=brand_id,
+        style_id=style_id,
+        topic_id=topic_id,
+        slides=slides_with_images,
+        caption=copy_data.get("caption", ""),
+        hashtags=copy_data.get("hashtags", []),
+    )
+
+    if progress_callback:
+        progress_callback("Gotowe!", 1.0)
+
+    from db import get_carousel
+    return get_carousel(carousel_id)
+
+
+def export_carousel_as_zip(carousel_id: str) -> Path:
+    """Spakuj wszystkie slajdy + caption.txt do pojedynczego pliku ZIP do pobrania."""
+    import zipfile
+    from db import get_carousel
+
+    carousel = get_carousel(carousel_id)
+    if not carousel:
+        raise ValueError(f"Carousel {carousel_id} nie istnieje")
+
+    carousel_dir = CAROUSELS_DIR / carousel["brand_id"] / carousel_id
+    zip_path = carousel_dir / f"{carousel_id}.zip"
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for slide in carousel.get("slides", []):
+            p = Path(slide.get("image_path", ""))
+            if p.exists():
+                zf.write(p, p.name)
+        caption_path = carousel_dir / "caption.txt"
+        if caption_path.exists():
+            zf.write(caption_path, "caption.txt")
+
+    return zip_path

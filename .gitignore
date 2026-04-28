@@ -1,0 +1,33 @@
+# Sekrety - NIGDY nie commituj
+.env
+.env.local
+.streamlit/secrets.toml
+*.pem
+*.key
+
+# Dane lokalne uzytkownika
+data/
+*.db
+*.db-journal
+*.sqlite
+
+# Binarki (cloudflared 65MB - tylko lokalnie)
+bin/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

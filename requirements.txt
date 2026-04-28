@@ -1,0 +1,24 @@
+streamlit>=1.40.0
+python-dotenv>=1.0.0
+
+# LLM SDKs
+anthropic>=0.40.0
+openai>=1.55.0
+google-genai>=0.3.0
+
+# Image generation + processing
+Pillow>=10.0.0
+requests>=2.31.0
+
+# Web scraping fallback
+yt-dlp>=2024.10.0
+ddgs>=8.0.0
+beautifulsoup4>=4.12.0
+
+# Phase 2+
+instagrapi>=2.1.0
+apscheduler>=3.10.0
+replicate>=0.30.0
+
+# Polish text
+unidecode>=1.3.0
