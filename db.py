@@ -61,6 +61,11 @@ CREATE TABLE IF NOT EXISTS style_profiles (
     layout_patterns TEXT,        -- JSON list[str]
     hook_formulas TEXT,          -- JSON list[str]
     composition_notes TEXT,
+    image_style TEXT,            -- string: prompt-ready opis stylu wizualnego
+    mood TEXT,                   -- string: ogolny nastroj
+    palette_description TEXT,    -- string: opis palety
+    tagline_pattern TEXT,        -- string: patterny tekstu
+    cta_style TEXT,              -- string: styl CTA
     reference_image_paths TEXT,  -- JSON list[str]
     extracted_summary TEXT,
     is_preferred INTEGER DEFAULT 0,
@@ -146,6 +151,25 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        _migrate_style_profiles(conn)
+
+
+def _migrate_style_profiles(conn):
+    """Dodaje brakujace kolumny do style_profiles dla starszych baz."""
+    existing_cols = {r["name"] for r in conn.execute("PRAGMA table_info(style_profiles)").fetchall()}
+    new_cols = {
+        "image_style": "TEXT",
+        "mood": "TEXT",
+        "palette_description": "TEXT",
+        "tagline_pattern": "TEXT",
+        "cta_style": "TEXT",
+    }
+    for col, col_type in new_cols.items():
+        if col not in existing_cols:
+            try:
+                conn.execute(f"ALTER TABLE style_profiles ADD COLUMN {col} {col_type}")
+            except sqlite3.OperationalError:
+                pass
 
 
 def now_iso() -> str:
@@ -282,6 +306,11 @@ def create_style(style_id: str, brand_id: str, name: str, profile: dict) -> dict
         "layout_patterns": json.dumps(profile.get("layout_patterns", []), ensure_ascii=False),
         "hook_formulas": json.dumps(profile.get("hook_formulas", []), ensure_ascii=False),
         "composition_notes": profile.get("composition_notes", ""),
+        "image_style": profile.get("image_style", ""),
+        "mood": profile.get("mood", ""),
+        "palette_description": profile.get("palette_description", ""),
+        "tagline_pattern": profile.get("tagline_pattern", ""),
+        "cta_style": profile.get("cta_style", ""),
         "reference_image_paths": json.dumps(profile.get("reference_image_paths", []),
                                               ensure_ascii=False),
         "extracted_summary": profile.get("extracted_summary", ""),

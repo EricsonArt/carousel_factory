@@ -85,8 +85,10 @@ IMAGE_MODELS = [
         "model_id": "gpt-image-1",
         "supports_reference": True,        # /images/edits przyjmuje refs
         "best_for": "tekst",                # czytelny tekst polski
-        "cost_per_image": 0.04,             # USD przy quality=high
-        "daily_quota": 200,                 # mozliwe do override per user
+        # PRAWDZIWY koszt OpenAI 2026: $0.19/obraz przy 1024x1536 quality=high
+        # (przy quality=medium ~$0.08, low ~$0.04)
+        "cost_per_image": 0.19,
+        "daily_quota": 200,
     },
     {
         "name": "gemini-2.5-flash-image",
@@ -94,7 +96,7 @@ IMAGE_MODELS = [
         "model_id": "gemini-2.5-flash-image",
         "supports_reference": True,        # multi-image blending
         "best_for": "styl",                 # idealny do replikacji stylu
-        "cost_per_image": 0.039,
+        "cost_per_image": 0.04,
         "daily_quota": 500,
     },
     {
@@ -108,6 +110,10 @@ IMAGE_MODELS = [
     },
 ]
 
+# Jakosc generowania obrazow: 'low' (~$0.04) | 'medium' (~$0.08) | 'high' (~$0.19)
+# Zmien na 'medium' jesli chcesz wiecej generacji w ramach DAILY_COST_CAP_USD
+IMAGE_QUALITY = os.getenv("IMAGE_QUALITY", "high")
+
 
 # ─────────────────────────────────────────────────────────────
 # KAROZELE - PARAMETRY GENERACJI
@@ -119,9 +125,45 @@ MAX_SLIDES = 10
 DEFAULT_SLIDES = 7
 
 # Czcionka do nakladania polskiego tekstu (Pillow overlay)
-_FONTS_WIN = Path("C:/Windows/Fonts")
-SLIDE_FONT_HEADLINE = str(_FONTS_WIN / "arialbd.ttf")  # bold dla naglowkow
-SLIDE_FONT_BODY = str(_FONTS_WIN / "arial.ttf")        # regular
+# Cross-platform: probujemy bundled -> Streamlit Cloud (DejaVu) -> Linux/Mac/Windows fallback
+ASSETS_FONTS_DIR = BASE_DIR / "assets" / "fonts"
+
+_FONT_BOLD_CANDIDATES = [
+    ASSETS_FONTS_DIR / "Inter-Variable.ttf",                                 # bundled, full Polish (preferred)
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),            # Streamlit Cloud / Debian
+    Path("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),    # Linux alt
+    Path("/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"),             # Linux alt
+    Path("/Library/Fonts/Arial Bold.ttf"),                                    # macOS
+    Path("/System/Library/Fonts/Helvetica.ttc"),                              # macOS fallback
+    Path("C:/Windows/Fonts/arialbd.ttf"),                                     # Windows
+    Path("C:/Windows/Fonts/segoeuib.ttf"),                                    # Windows alt
+]
+
+_FONT_REGULAR_CANDIDATES = [
+    ASSETS_FONTS_DIR / "Inter-Variable.ttf",                                 # bundled, full Polish
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+    Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+    Path("/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
+    Path("/Library/Fonts/Arial.ttf"),
+    Path("/System/Library/Fonts/Helvetica.ttc"),
+    Path("C:/Windows/Fonts/arial.ttf"),
+    Path("C:/Windows/Fonts/segoeui.ttf"),
+]
+
+
+def _find_first_existing(paths: list[Path]) -> str:
+    """Zwraca pierwsza istniejaca sciezke albo pusty string (Pillow uzyje default)."""
+    for p in paths:
+        try:
+            if Path(p).exists():
+                return str(p)
+        except (OSError, PermissionError):
+            continue
+    return ""
+
+
+SLIDE_FONT_HEADLINE = _find_first_existing(_FONT_BOLD_CANDIDATES)
+SLIDE_FONT_BODY = _find_first_existing(_FONT_REGULAR_CANDIDATES)
 SLIDE_TEXT_COLOR = "#FFFFFF"
 SLIDE_TEXT_STROKE = "#000000"
 SLIDE_TEXT_STROKE_WIDTH = 4
@@ -144,7 +186,27 @@ SLOT_HOURS = [
 # ─────────────────────────────────────────────────────────────
 # COST CONTROL
 # ─────────────────────────────────────────────────────────────
-DAILY_COST_CAP_USD = float(os.getenv("DAILY_COST_CAP_USD", "5.0"))
+def _get_secret_float(key: str, default: float) -> float:
+    val = _get_secret(key, "")
+    if not val:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
+DAILY_COST_CAP_USD = _get_secret_float("DAILY_COST_CAP_USD", 5.0)
+
+
+# ─────────────────────────────────────────────────────────────
+# DETEKCJA STREAMLIT CLOUD (do warning'ow o ephemeral storage)
+# ─────────────────────────────────────────────────────────────
+IS_STREAMLIT_CLOUD = bool(
+    os.getenv("STREAMLIT_RUNTIME_ENV") == "cloud"
+    or "/mount/src" in str(BASE_DIR)
+    or os.getenv("HOSTNAME", "").startswith("streamlit-")
+)
 
 
 # ─────────────────────────────────────────────────────────────

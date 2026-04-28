@@ -21,7 +21,7 @@ from typing import Optional
 from config import (
     OPENAI_API_KEY, GEMINI_API_KEY, REPLICATE_API_TOKEN,
     IMAGE_MODELS, SLIDE_WIDTH, SLIDE_HEIGHT,
-    DAILY_COST_CAP_USD,
+    DAILY_COST_CAP_USD, IMAGE_QUALITY,
 )
 from db import get_today_usage, increment_usage, get_today_total_cost
 
@@ -191,7 +191,7 @@ def _call_openai(model_id: str, prompt: str, refs: Optional[list], size: tuple) 
                 image=ref_files if len(ref_files) > 1 else ref_files[0],
                 prompt=prompt,
                 size=openai_size,
-                quality="high",
+                quality=IMAGE_QUALITY,
                 n=1,
             )
         else:
@@ -199,7 +199,7 @@ def _call_openai(model_id: str, prompt: str, refs: Optional[list], size: tuple) 
                 model=model_id,
                 prompt=prompt,
                 size=openai_size,
-                quality="high",
+                quality=IMAGE_QUALITY,
                 n=1,
             )
     except Exception as e:

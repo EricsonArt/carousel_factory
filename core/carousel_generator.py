@@ -217,9 +217,23 @@ def _overlay_text(img: Image.Image, headline: str, body: str,
 
 
 def _load_font(path: str, size: int):
+    """
+    Probuje zaladowac font ze sciezki. Obsluga edge case'ow:
+      - empty path (brak fontow systemowych) -> Pillow default ze skalowaniem (10.1+)
+      - nie znaleziony plik -> default ze skalowaniem
+      - inny blad -> default ze skalowaniem
+    """
+    if path:
+        try:
+            return ImageFont.truetype(path, size)
+        except (OSError, IOError):
+            pass
+
+    # Fallback - Pillow 10.1+ default font supports size
     try:
-        return ImageFont.truetype(path, size)
-    except Exception:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        # Pillow < 10.1 - bitmap font bez size
         return ImageFont.load_default()
 
 

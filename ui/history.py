@@ -126,20 +126,20 @@ def render_history(brand_id: str):
                     label_visibility="collapsed",
                 )
 
-            # Actions
+            # Actions - direct download_button
             col_a, col_b = st.columns([1, 4])
             with col_a:
-                if st.button("📦 Eksport ZIP", key=f"zip_hist_{c['id']}", use_container_width=True):
-                    try:
-                        zip_path = export_carousel_as_zip(c["id"])
-                        with open(zip_path, "rb") as f:
-                            st.download_button(
-                                "⬇️ Pobierz ZIP",
-                                data=f.read(),
-                                file_name=f"karuzela_{c['id']}.zip",
-                                mime="application/zip",
-                                key=f"dl_hist_{c['id']}",
-                                use_container_width=True,
-                            )
-                    except Exception as e:
-                        st.error(f"Błąd eksportu: {e}")
+                try:
+                    zip_path = export_carousel_as_zip(c["id"])
+                    with open(zip_path, "rb") as f:
+                        zip_bytes = f.read()
+                    st.download_button(
+                        "⬇️ Pobierz ZIP",
+                        data=zip_bytes,
+                        file_name=f"karuzela_{c['id']}.zip",
+                        mime="application/zip",
+                        key=f"dl_hist_{c['id']}",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    st.error(f"Błąd ZIP: {str(e)[:80]}")

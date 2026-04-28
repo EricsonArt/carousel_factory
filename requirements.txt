@@ -7,7 +7,7 @@ openai>=1.55.0
 google-genai>=0.3.0
 
 # Image generation + processing
-Pillow>=10.0.0
+Pillow>=10.1.0    # 10.1+ supports ImageFont.load_default(size=...)
 requests>=2.31.0
 
 # Web scraping fallback

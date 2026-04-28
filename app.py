@@ -168,10 +168,25 @@ with st.sidebar:
     """, unsafe_allow_html=True)
     st.progress(cost_pct)
 
+    # Cloud storage warning (tylko na Streamlit Cloud)
+    from config import IS_STREAMLIT_CLOUD
+    if IS_STREAMLIT_CLOUD:
+        st.markdown("""
+        <div style="background:linear-gradient(135deg,#FFFBEB 0%,#FEF3C7 100%);
+                    border:1px solid #FDE68A;border-radius:10px;padding:0.7rem 0.85rem;
+                    margin-top:1rem;font-size:0.72rem;line-height:1.5;color:#92400E;">
+            <div style="font-weight:700;margin-bottom:0.2rem;">⚠️ Pamiec ulotna</div>
+            <div style="color:#78350F;">
+                Streamlit Cloud kasuje dane przy restarcie aplikacji.
+                <strong>Pobieraj ZIP-y na biezaco</strong> — ponowna generacja kosztuje API.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
     st.markdown("""
     <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #EAE8F2;">
         <div style="font-size:0.6rem;color:#9CA3AF;text-align:center;letter-spacing:0.06em;">
-            Phase 1  ·  v0.2.0
+            Phase 1  ·  v0.3.0
         </div>
     </div>
     """, unsafe_allow_html=True)
