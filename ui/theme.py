@@ -29,10 +29,25 @@ _CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Instrument+Serif:ital@0;1&display=swap');
 @import url('https://fonts.googleapis.com/icon?family=Material+Icons|Material+Icons+Outlined|Material+Symbols+Rounded');
 
-html, body, [class*="css"], .stApp, .stApp * {
+html, body, [class*="css"], .stApp {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+}
+
+/* Material Icons/Symbols — NIE nadpisuj font-family, bo ikony pokazują się jako tekst */
+.material-icons, .material-symbols-rounded, .material-symbols-outlined,
+.material-symbols-sharp, [class^="material"] {
+    font-family: 'Material Icons', 'Material Symbols Rounded', 'Material Symbols Outlined' !important;
+    font-size: 20px;
+    direction: ltr;
+    display: inline-block;
+    line-height: 1;
+    text-transform: none;
+    letter-spacing: normal;
+    word-wrap: normal;
+    white-space: nowrap;
+    overflow: hidden;
 }
 
 /* === GLOBAL BG with subtle gradient mesh === */
