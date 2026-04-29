@@ -152,6 +152,19 @@ def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
         _migrate_style_profiles(conn)
+        _migrate_carousels(conn)
+
+
+def _migrate_carousels(conn):
+    """Dodaje brakujące kolumny do carousels dla starszych baz."""
+    existing = {r["name"] for r in conn.execute("PRAGMA table_info(carousels)").fetchall()}
+    new_cols = {"publer_post_id": "TEXT"}
+    for col, col_type in new_cols.items():
+        if col not in existing:
+            try:
+                conn.execute(f"ALTER TABLE carousels ADD COLUMN {col} {col_type}")
+            except sqlite3.OperationalError:
+                pass
 
 
 def _migrate_style_profiles(conn):

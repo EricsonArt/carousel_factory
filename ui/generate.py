@@ -1,14 +1,14 @@
 """
-Generator karuzel — manualne wygenerowanie karuzeli z podanym tematem.
-Phase 1: brak auto-postingu, tylko ZIP do pobrania.
+Generator karuzel — generowanie + wysyłanie do Publer.
 """
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
 from core.carousel_generator import generate_carousel, export_carousel_as_zip
-from db import get_brand, get_brief, list_styles
-from config import DEFAULT_SLIDES, MIN_SLIDES, MAX_SLIDES
+from db import get_brand, get_brief, list_styles, update_carousel
+from config import DEFAULT_SLIDES, MIN_SLIDES, MAX_SLIDES, PUBLER_API_KEY, PUBLER_WORKSPACE_ID
 from ui.theme import page_header, section_title, empty_state
 
 
@@ -230,3 +230,191 @@ def _show_carousel_preview(carousel: dict):
             )
         except Exception as e:
             st.error(f"Błąd eksportu ZIP: {e}")
+
+    # Publer auto-publish section
+    st.markdown('<div style="margin-top:1.5rem;"></div>', unsafe_allow_html=True)
+    _show_publer_section(carousel)
+
+
+def _show_publer_section(carousel: dict):
+    """Sekcja zaplanowanego wysyłania karuzeli do Publer."""
+    with st.expander("📤 Wyślij do Publer (auto-publikacja)", expanded=bool(PUBLER_API_KEY)):
+
+        if not PUBLER_API_KEY:
+            st.info(
+                "**Brak klucza Publer API.**\n\n"
+                "Aby włączyć auto-publikację:\n"
+                "1. Zarejestruj się na publer.com (plan Professional ~$12/mies)\n"
+                "2. Połącz konta Instagram i TikTok w Publer\n"
+                "3. W Publer → Settings → API → wygeneruj klucz\n"
+                "4. Dodaj do Streamlit Secrets:\n"
+            )
+            st.code('PUBLER_API_KEY = "twój_klucz_publer"', language="toml")
+            return
+
+        from core.publisher_publer import PublerClient, PublerError
+
+        car_id = carousel["id"]
+        accounts_key = "publer_accounts"
+
+        # ── Załaduj konta ─────────────────────────────────────────────────
+        col_load, _ = st.columns([1, 3])
+        with col_load:
+            if st.button("🔄 Załaduj konta Publer", key=f"load_acc_{car_id}"):
+                try:
+                    client = PublerClient(PUBLER_API_KEY, PUBLER_WORKSPACE_ID)
+                    if not PUBLER_WORKSPACE_ID:
+                        workspaces = client.get_workspaces()
+                        if workspaces:
+                            client.set_workspace(str(workspaces[0].get("id", "")))
+                    accounts = client.get_accounts()
+                    st.session_state[accounts_key] = accounts
+                    st.success(f"Załadowano {len(accounts)} kont.")
+                except PublerError as e:
+                    st.error(f"Błąd połączenia z Publer: {e}")
+
+        accounts: list[dict] = st.session_state.get(accounts_key, [])
+        if not accounts:
+            st.caption("Kliknij 'Załaduj konta Publer' żeby zobaczyć połączone konta.")
+            return
+
+        # ── Picker kont ───────────────────────────────────────────────────
+        ig_accounts = [a for a in accounts if a.get("provider") in ("instagram", "ig")]
+        tt_accounts = [a for a in accounts if a.get("provider") in ("tiktok", "tt")]
+
+        def _account_label(a: dict) -> str:
+            return a.get("name") or a.get("username") or str(a.get("id", "?"))
+
+        selected_ig: list[str] = []
+        selected_tt: list[str] = []
+
+        col_ig, col_tt = st.columns(2)
+        with col_ig:
+            if ig_accounts:
+                chosen = st.multiselect(
+                    "📷 Instagram",
+                    options=[a["id"] for a in ig_accounts],
+                    format_func=lambda aid: _account_label(
+                        next((a for a in ig_accounts if a["id"] == aid), {})
+                    ),
+                    key=f"pub_ig_sel_{car_id}",
+                )
+                selected_ig = chosen
+            else:
+                st.caption("Brak kont Instagram w Publer")
+
+        with col_tt:
+            if tt_accounts:
+                chosen = st.multiselect(
+                    "🎵 TikTok",
+                    options=[a["id"] for a in tt_accounts],
+                    format_func=lambda aid: _account_label(
+                        next((a for a in tt_accounts if a["id"] == aid), {})
+                    ),
+                    key=f"pub_tt_sel_{car_id}",
+                )
+                selected_tt = chosen
+            else:
+                st.caption("Brak kont TikTok w Publer")
+
+        # ── Data i godzina ────────────────────────────────────────────────
+        st.markdown('<div style="margin-top:0.5rem;"></div>', unsafe_allow_html=True)
+        col_d, col_t = st.columns(2)
+        now_local = datetime.now()
+        default_dt = now_local + timedelta(hours=2)
+        with col_d:
+            sched_date = st.date_input(
+                "Data publikacji",
+                value=default_dt.date(),
+                min_value=now_local.date(),
+                key=f"pub_date_{car_id}",
+            )
+        with col_t:
+            sched_time = st.time_input(
+                "Godzina",
+                value=default_dt.replace(second=0, microsecond=0).time(),
+                step=300,
+                key=f"pub_time_{car_id}",
+            )
+
+        scheduled_dt = datetime.combine(sched_date, sched_time)
+        scheduled_iso = scheduled_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        st.caption(f"Zaplanowano na: **{scheduled_dt.strftime('%d.%m.%Y o %H:%M')}** (czas lokalny)")
+
+        # ── Wyślij ────────────────────────────────────────────────────────
+        st.markdown('<div style="margin-top:0.75rem;"></div>', unsafe_allow_html=True)
+        if st.button(
+            "🚀 Wyślij do Publer",
+            key=f"send_publer_{car_id}",
+            type="primary",
+            disabled=not (selected_ig or selected_tt),
+        ):
+            _send_to_publer(carousel, selected_ig, selected_tt, scheduled_iso)
+
+
+def _send_to_publer(
+    carousel: dict,
+    ig_ids: list[str],
+    tt_ids: list[str],
+    scheduled_iso: str,
+):
+    """Upload obrazków + stworzenie zaplanowanego posta w Publer."""
+    from core.publisher_publer import PublerClient, PublerError
+
+    slides = carousel.get("slides", [])
+    image_paths = [s["image_path"] for s in slides if s.get("image_path")]
+
+    if not image_paths:
+        st.error("Brak obrazków w karuzeli.")
+        return
+
+    client = PublerClient(PUBLER_API_KEY, PUBLER_WORKSPACE_ID)
+    if not PUBLER_WORKSPACE_ID:
+        try:
+            workspaces = client.get_workspaces()
+            if workspaces:
+                client.set_workspace(str(workspaces[0].get("id", "")))
+        except PublerError as e:
+            st.error(f"Nie mogę pobrać workspace: {e}")
+            return
+
+    progress = st.progress(0.0, text="Przesyłam obrazki do Publer...")
+    media_ids: list[str] = []
+
+    try:
+        for i, path in enumerate(image_paths):
+            progress.progress(
+                (i + 0.5) / len(image_paths),
+                text=f"Przesyłam slajd {i + 1}/{len(image_paths)}...",
+            )
+            mid = client.upload_media(path)
+            media_ids.append(mid)
+
+        progress.progress(0.95, text="Tworzę zaplanowany post...")
+        result = client.schedule_carousel(
+            ig_account_ids=ig_ids,
+            tt_account_ids=tt_ids,
+            caption=carousel.get("caption", ""),
+            hashtags=carousel.get("hashtags") or [],
+            media_ids=media_ids,
+            scheduled_at=scheduled_iso,
+        )
+        progress.progress(1.0, text="Gotowe!")
+
+        publer_post_id = str(
+            result.get("id")
+            or (result.get("data") or {}).get("id")
+            or result.get("job_id")
+            or "ok"
+        )
+        update_carousel(carousel["id"], publer_post_id=publer_post_id, status="scheduled")
+        st.success(
+            f"✅ Karuzela zaplanowana w Publer! "
+            f"Publer opublikuje ją automatycznie o wyznaczonej porze."
+        )
+        st.caption(f"Publer post ID: `{publer_post_id}`")
+
+    except PublerError as e:
+        progress.empty()
+        st.error(f"Błąd Publer API: {e}")

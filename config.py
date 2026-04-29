@@ -65,6 +65,10 @@ TT_ACCESS_TOKEN = _get_secret("TT_ACCESS_TOKEN")
 # Haslo dostepu do aplikacji (gdy wystawiona publicznie). Pusty = brak gate.
 APP_PASSWORD = _get_secret("APP_PASSWORD")
 
+# Publer (auto-publishing via Publer API — Phase 2)
+PUBLER_API_KEY = _get_secret("PUBLER_API_KEY")
+PUBLER_WORKSPACE_ID = _get_secret("PUBLER_WORKSPACE_ID")  # opcjonalny — auto-fetchowany jeśli pusty
+
 
 # ─────────────────────────────────────────────────────────────
 # MODELE LLM
