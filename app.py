@@ -197,83 +197,121 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────
 
 if not st.session_state.active_brand_id:
-    st.markdown("""
-    <div style="max-width:880px;margin:5vh auto 4vh;text-align:center;padding:2rem 1.25rem;">
-        <div style="display:inline-flex;align-items:center;gap:0.45rem;padding:0.4rem 0.95rem;
-                    background:white;border:1px solid #EAE8F2;border-radius:999px;
-                    box-shadow:0 1px 2px rgba(11,10,24,0.04);font-size:0.74rem;font-weight:600;
-                    color:#6B7280;margin-bottom:1.6rem;letter-spacing:-0.005em;">
-            <span style="width:6px;height:6px;border-radius:50%;
-                         background:linear-gradient(135deg,#10B981,#059669);
-                         box-shadow:0 0 8px rgba(16,185,129,0.6);"></span>
-            Phase 1 · v0.3.0 · Manual generation ready
+    st.html("""
+    <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: transparent; }
+    @keyframes float {
+        0%, 100% { transform: translateY(0) rotate(0deg); }
+        50% { transform: translateY(-10px) rotate(2deg); }
+    }
+    @keyframes shimmer {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+    .wrap {
+        max-width: 880px; margin: 5vh auto 4vh;
+        text-align: center; padding: 2rem 1.25rem;
+    }
+    .badge {
+        display: inline-flex; align-items: center; gap: 0.45rem;
+        padding: 0.4rem 0.95rem;
+        background: white; border: 1px solid #EAE8F2; border-radius: 999px;
+        box-shadow: 0 1px 2px rgba(11,10,24,0.04);
+        font-size: 0.74rem; font-weight: 600; color: #6B7280;
+        margin-bottom: 1.6rem; letter-spacing: -0.005em;
+    }
+    .badge-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: linear-gradient(135deg,#10B981,#059669);
+        box-shadow: 0 0 8px rgba(16,185,129,0.6);
+    }
+    .hero-icon {
+        font-size: 5rem; margin-bottom: 1.2rem;
+        filter: drop-shadow(0 12px 28px rgba(109,40,217,0.32));
+        animation: float 6s ease-in-out infinite;
+    }
+    h1 {
+        font-size: 3rem; font-weight: 800; color: #0B0A18;
+        letter-spacing: -0.04em; margin: 0 0 1.1rem; line-height: 1.05;
+    }
+    .hl {
+        background: linear-gradient(135deg,#6D28D9 0%,#8B5CF6 35%,#D946EF 70%,#F59E0B 100%);
+        background-size: 200% 200%;
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        background-clip: text;
+        animation: shimmer 8s ease-in-out infinite;
+    }
+    .lead {
+        color: #6B7280; font-size: 1.1rem; margin: 0 auto 3rem;
+        line-height: 1.65; max-width: 560px; font-weight: 400;
+    }
+    .lead strong { color: #1F1B3B; }
+    .cards {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
+        gap: 1rem; text-align: left; margin-bottom: 2.5rem;
+    }
+    .card {
+        background: white; border: 1px solid #EAE8F2; border-radius: 18px;
+        padding: 1.5rem; box-shadow: 0 1px 2px rgba(11,10,24,0.04), 0 4px 16px -4px rgba(11,10,24,0.04);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    .card:hover { transform: translateY(-3px); box-shadow: 0 1px 2px rgba(11,10,24,0.04), 0 16px 40px -8px rgba(109,40,217,0.18); }
+    .card-icon {
+        width: 44px; height: 44px; border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 1.3rem; margin-bottom: 0.9rem;
+    }
+    .card-title { font-weight: 700; color: #0B0A18; font-size: 0.98rem; margin-bottom: 0.35rem; }
+    .card-body { color: #6B7280; font-size: 0.85rem; line-height: 1.6; }
+    .cta {
+        display: inline-flex; align-items: center; gap: 0.7rem;
+        padding: 0.85rem 1.4rem;
+        background: linear-gradient(135deg,#FAFAFC 0%,#F5F3FF 100%);
+        border: 1px solid #EAE8F2; border-radius: 14px;
+        box-shadow: 0 1px 2px rgba(11,10,24,0.04);
+        font-size: 0.92rem; font-weight: 500; color: #1F1B3B;
+    }
+    .cta-hl {
+        background: linear-gradient(135deg,#6D28D9,#D946EF);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        background-clip: text; font-weight: 700;
+    }
+    </style>
+    <div class="wrap">
+        <div class="badge"><span class="badge-dot"></span>Phase 1 &middot; v0.3.0 &middot; Manual generation ready</div>
+        <div class="hero-icon">🎠</div>
+        <h1>Witaj w <span class="hl">KaruzelAI</span></h1>
+        <p class="lead">Studio do automatycznego tworzenia <strong>wiralowych karuzel</strong> na Instagram i TikTok. AI uczy się Twojego stylu, pisze copy i generuje slajdy.</p>
+        <div class="cards">
+            <div class="card">
+                <div class="card-icon" style="background:linear-gradient(135deg,#F5F3FF,#EDE9FE);">🧠</div>
+                <div class="card-title">AI Onboarding</div>
+                <div class="card-body">AI zadaje pytania po polsku i sam dopisuje research z internetu.</div>
+            </div>
+            <div class="card">
+                <div class="card-icon" style="background:linear-gradient(135deg,#FCE7F3,#FBCFE8);">🎨</div>
+                <div class="card-title">Style Library</div>
+                <div class="card-body">Wgraj zdjęcia z viralowych postów — AI uczy się Twojego stylu.</div>
+            </div>
+            <div class="card">
+                <div class="card-icon" style="background:linear-gradient(135deg,#DBEAFE,#BFDBFE);">⚡</div>
+                <div class="card-title">Generator</div>
+                <div class="card-body">Wpisz temat, AI w 90 sekund tworzy 8 slajdów + caption + hashtagi.</div>
+            </div>
+            <div class="card">
+                <div class="card-icon" style="background:linear-gradient(135deg,#FEF3C7,#FDE68A);">📦</div>
+                <div class="card-title">Export ZIP</div>
+                <div class="card-body">Pobierasz gotowe slajdy + opis. Wrzucasz na IG/TikTok lub do Publera.</div>
+            </div>
         </div>
-
-        <div class="hero-icon" style="font-size:5rem;margin-bottom:1.2rem;
-                    filter:drop-shadow(0 12px 28px rgba(109,40,217,0.32));">🎠</div>
-
-        <h1 style="font-size:3rem;font-weight:800;color:#0B0A18;letter-spacing:-0.04em;
-                   margin:0 0 1.1rem;line-height:1.05;">
-            Witaj w <span class="hero-headline">KaruzelAI</span>
-        </h1>
-
-        <p style="color:#6B7280;font-size:1.1rem;margin:0 auto 3rem;line-height:1.65;max-width:560px;
-                  letter-spacing:-0.005em;font-weight:400;">
-            Studio do automatycznego tworzenia <strong style="color:#1F1B3B;">wiralowych karuzel</strong>
-            na Instagram i TikTok. AI uczy się Twojego stylu, pisze copy i generuje slajdy.
-        </p>
-
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;
-                    text-align:left;margin-bottom:2.5rem;">
-            <div class="feature-card">
-                <div class="feature-icon" style="background:linear-gradient(135deg,#F5F3FF 0%,#EDE9FE 100%);">🧠</div>
-                <div style="font-weight:700;color:#0B0A18;font-size:0.98rem;margin-bottom:0.35rem;
-                            letter-spacing:-0.015em;">AI Onboarding</div>
-                <div style="color:#6B7280;font-size:0.85rem;line-height:1.6;">
-                    AI zadaje pytania po polsku i sam dopisuje research z internetu.
-                </div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon" style="background:linear-gradient(135deg,#FCE7F3 0%,#FBCFE8 100%);">🎨</div>
-                <div style="font-weight:700;color:#0B0A18;font-size:0.98rem;margin-bottom:0.35rem;
-                            letter-spacing:-0.015em;">Style Library</div>
-                <div style="color:#6B7280;font-size:0.85rem;line-height:1.6;">
-                    Wgraj zdjęcia z viralowych postów — AI uczy się Twojego stylu.
-                </div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon" style="background:linear-gradient(135deg,#DBEAFE 0%,#BFDBFE 100%);">⚡</div>
-                <div style="font-weight:700;color:#0B0A18;font-size:0.98rem;margin-bottom:0.35rem;
-                            letter-spacing:-0.015em;">Generator</div>
-                <div style="color:#6B7280;font-size:0.85rem;line-height:1.6;">
-                    Wpisz temat, AI w 90 sekund tworzy 8 slajdów + caption + hashtagi.
-                </div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon" style="background:linear-gradient(135deg,#FEF3C7 0%,#FDE68A 100%);">📦</div>
-                <div style="font-weight:700;color:#0B0A18;font-size:0.98rem;margin-bottom:0.35rem;
-                            letter-spacing:-0.015em;">Export ZIP</div>
-                <div style="color:#6B7280;font-size:0.85rem;line-height:1.6;">
-                    Pobierasz gotowe slajdy + opis. Wrzucasz na IG/TikTok lub do Publera.
-                </div>
-            </div>
-        </div>
-
-        <div style="display:inline-flex;align-items:center;gap:0.7rem;padding:0.85rem 1.4rem;
-                    background:linear-gradient(135deg,#FAFAFC 0%,#F5F3FF 100%);
-                    border:1px solid #EAE8F2;border-radius:14px;
-                    box-shadow:0 1px 2px rgba(11,10,24,0.04);">
+        <div class="cta">
             <span style="font-size:1.2rem;">👈</span>
-            <span style="color:#1F1B3B;font-size:0.92rem;font-weight:500;letter-spacing:-0.005em;">
-                Kliknij
-                <strong style="background:linear-gradient(135deg,#6D28D9,#D946EF);
-                               -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-                               font-weight:700;">+ Nowa marka</strong>
-                w panelu po lewej, żeby zacząć
-            </span>
+            <span>Kliknij <span class="cta-hl">+ Nowa marka</span> w panelu po lewej, żeby zacząć</span>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
     st.stop()
 
 
