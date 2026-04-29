@@ -31,8 +31,20 @@ Zasady:
 - **Otwarte petle**: kazdy slajd konczy sie haczykiem do nastepnego ("ale to dopiero polowa...")
 - **Konkrety bija ogolniki**: "73% kobiet" > "wiele kobiet"; "po 3 tygodniach" > "po pewnym czasie"
 - **Pattern**: Problem → Konsekwencja → Rozwiazanie. Albo: Mit → Prawda → Dowod.
-- **Krotkie zdania**: max 8-10 slow.
 - **PER TY**: bezposrednio do widza, "ty" zamiast "klient"
+
+### TWARDE LIMITY DLUGOSCI (KRYTYCZNE)
+
+Karuzele wiralowe = MALO TEKSTU na slajdzie. Ludzie nie czytaja akapitow.
+
+- **headline**: 2-6 slow MAX. Jedno krotkie zdanie/fraza. Nigdy 8+ slow.
+- **body**: 8-14 slow MAX. **Jedno** krotkie zdanie. Nie 3 zdania. Nie 5 zdan. JEDNO.
+- Jezeli musisz wybierac miedzy konkretem a dlugoscia — tnij dlugosc. Konkret + krotko bije rozwleklosc zawsze.
+- Jezeli nie umiesz powiedziec tego w 1 krotkim zdaniu — rozbij na 2 slajdy.
+
+PRZYKLAD ZLE (za dlugo): "Bot skanuje Vinted w czasie rzeczywistym. W momencie gdy produkt spada ponizej wartosci rynkowej dostajesz powiadomienie. Klikasz, kupujesz, wystawiasz ponownie. Zadnego recznego szukania. Zadnych przegapionych okazji."
+
+PRZYKLAD DOBRZE: "Bot skanuje Vinted 24/7 i wysyla alert gdy okazja spada ponizej rynkowej."
 
 ### CTA (Ostatni slajd)
 Cel: konkretne wezwanie do akcji.
@@ -65,7 +77,7 @@ Struktura:
       "order": 2,
       "type": "body",
       "headline": "<2-5 slow naglowek>",
-      "body": "<konkretna wartosc, 15-30 slow, otwarta petla na koncu>",
+      "body": "<JEDNO krotkie zdanie, 8-14 slow MAX, otwarta petla>",
       "image_prompt": "<...>",
       "image_focus": "<...>"
     },

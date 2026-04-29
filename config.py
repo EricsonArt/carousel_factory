@@ -174,8 +174,8 @@ SLIDE_FONT_HEADLINE = _find_first_existing(_FONT_BOLD_CANDIDATES)
 SLIDE_FONT_BODY = _find_first_existing(_FONT_REGULAR_CANDIDATES)
 SLIDE_TEXT_COLOR = "#FFFFFF"
 SLIDE_TEXT_STROKE = "#000000"
-SLIDE_TEXT_STROKE_WIDTH = 8        # TikTok-style mocny czarny obrys (Montserrat Black + 8px)
-SLIDE_TEXT_STROKE_WIDTH_BODY = 5   # body trochę cieńszy
+SLIDE_TEXT_STROKE_WIDTH = 6        # TikTok-style obrys, ale nie za agresywny
+SLIDE_TEXT_STROKE_WIDTH_BODY = 3   # body cieńszy
 
 
 # ─────────────────────────────────────────────────────────────

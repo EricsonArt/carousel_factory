@@ -127,17 +127,13 @@ def render_slide_image(
     image_focus = slide.get("image_focus", "center")
 
     # Tekst do wstrzykniecia w obraz (tylko dla trybu inline)
+    # KRYTYCZNE: w inline puszczamy TYLKO headline (krotki) — body jest za dlugi
+    # i modele AI go masakruja na akapity lawiny. Body lapie sie pod karuzela jako caption.
     inline_text_payload = None
     if text_mode == "inline" and use_ai_images:
-        # Headline jako glowna linia + body jako mniejszy podtytul
         ht = (headline or "").strip().upper()
-        bt = (body or "").strip()
-        if ht and bt:
-            inline_text_payload = f"{ht}\n\n{bt}"
-        elif ht:
+        if ht:
             inline_text_payload = ht
-        elif bt:
-            inline_text_payload = bt
 
     if use_ai_images:
         image_prompt = slide.get("image_prompt", "")
@@ -212,13 +208,17 @@ def _overlay_text(img: Image.Image, headline: str, body: str,
     W, H = img.size
     draw = ImageDraw.Draw(img)
 
-    # Wraps - krotsze linie = wieksza czcionka = bardziej viralowy look
-    headline_lines = wrap_text_for_slide(headline.upper() if headline else "", max_chars_per_line=16)
-    body_lines = wrap_text_for_slide(body or "", max_chars_per_line=30)
+    # Wraps — chcemy zeby tekst zajmowal max ~40-45% wysokosci slajdu
+    headline_lines = wrap_text_for_slide(headline.upper() if headline else "", max_chars_per_line=14)
+    body_lines = wrap_text_for_slide(body or "", max_chars_per_line=28)
 
-    # Wieksze rozmiary fontow — TikTok mial ogromny tekst
-    head_size = _pick_font_size(headline_lines, max_size=130, min_size=72)
-    body_size = _pick_font_size(body_lines, max_size=52, min_size=34)
+    # Rozmiary — duzo mniejsze gdy tekstu jest duzo (zeby nie zalewac obrazu)
+    total_chars = sum(len(l) for l in headline_lines + body_lines)
+    head_size = _pick_font_size(headline_lines, max_size=110, min_size=64)
+    body_size = _pick_font_size(body_lines, max_size=40, min_size=28)
+    if total_chars > 120:
+        head_size = int(head_size * 0.85)
+        body_size = int(body_size * 0.85)
 
     head_font = _load_font(SLIDE_FONT_HEADLINE, head_size)
     body_font = _load_font(SLIDE_FONT_BODY, body_size)
