@@ -308,6 +308,179 @@ def _render_jobs_panel(brand_id: str):
                     st.rerun()
 
 
+_ARCHETYPE_LABELS = {
+    "list":               ("📋", "Lista", "#7C3AED", "#EDE9FE"),
+    "pattern_interrupt":  ("⚡", "Pattern interrupt", "#DC2626", "#FEE2E2"),
+    "specific_promise":   ("🎯", "Konkretna obietnica", "#059669", "#D1FAE5"),
+    "authority_reveal":   ("👑", "Autorytet zdradza", "#B45309", "#FEF3C7"),
+    "counterintuitive":   ("🔄", "Paradoks", "#0891B2", "#CFFAFE"),
+    "story":              ("📖", "Historia", "#BE185D", "#FCE7F3"),
+}
+
+
+def _render_topic_ai_section(brand_id: str, brief: dict):
+    """Sekcja AI generowania pomysłów na temat karuzeli — eksperckie, konwertujące tematy."""
+    section_title("Pomysł na karuzelę", icon="💡")
+
+    # Premium intro
+    st.markdown("""
+        <div style="background:linear-gradient(135deg,#FAF5FF 0%,#FCE7F3 50%,#FFF7ED 100%);
+                    border:1px solid #DDD6FE;border-radius:14px;padding:1rem 1.3rem;
+                    margin-bottom:0.9rem;line-height:1.55;">
+            <div style="font-weight:700;color:#1F1B3B;font-size:0.92rem;margin-bottom:0.25rem;">
+                💎 Brak pomysłu? AI wygeneruje 5 tematów klasy world-class.
+            </div>
+            <div style="font-size:0.8rem;color:#6B7280;">
+                Bazuje na briefie + ICP + 6 archetypach wiralowych hooków.
+                Każdy temat z analizą: format, target pain, value w slajdach, konwersja.
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    has_brief = bool(brief.get("product") or brief.get("avatars") or brief.get("usps"))
+    if not has_brief:
+        st.warning(
+            "⚠️ Brief marki jest pusty — AI wygeneruje generyczne pomysły. "
+            "Uzupełnij **Brief**, **Produkt** i **ICP** żeby tematy były precyzyjnie dopasowane."
+        )
+
+    btn_col, info_col = st.columns([2, 3])
+    with btn_col:
+        if st.button(
+            "💎 AI: 5 najlepszych pomysłów",
+            type="secondary",
+            use_container_width=True,
+            disabled=st.session_state.get("topic_ai_loading", False),
+        ):
+            st.session_state["topic_ai_loading"] = True
+            st.rerun()
+
+    if st.session_state.get("topic_ai_loading"):
+        try:
+            with st.spinner("🧠 AI analizuje brief, ICP i pisze tematy klasy world-class (~15s)..."):
+                from core.topic_generator import generate_viral_topics, get_recent_topics
+                recent = get_recent_topics(brand_id, limit=8)
+                suggestions = generate_viral_topics(
+                    brief=brief,
+                    n=5,
+                    exclude_topics=recent,
+                )
+                st.session_state["topic_suggestions"] = suggestions
+                st.session_state["topic_ai_loading"] = False
+                st.rerun()
+        except Exception as e:
+            st.session_state["topic_ai_loading"] = False
+            st.error(f"Błąd AI: {e}")
+
+    # Wyświetl wygenerowane pomysły
+    suggestions = st.session_state.get("topic_suggestions") or []
+    if suggestions:
+        st.markdown(
+            f"""<div style="margin:1.2rem 0 0.7rem;display:flex;justify-content:space-between;
+                            align-items:baseline;">
+                <span style="font-size:0.85rem;font-weight:700;color:#1F1B3B;letter-spacing:-0.01em;">
+                    🏆 {len(suggestions)} pomysłów posortowanych po sile wirala
+                </span>
+                <span style="font-size:0.7rem;color:#6B7280;">kliknij 'Użyj →' żeby wybrać</span>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+        for i, s in enumerate(suggestions):
+            score = s.get("predicted_score", 0)
+            score_color = "#10B981" if score >= 8 else "#F59E0B" if score >= 6 else "#94A3B8"
+
+            arch_key = s.get("hook_archetype", "")
+            arch_icon, arch_label, arch_fg, arch_bg = _ARCHETYPE_LABELS.get(
+                arch_key, ("✨", arch_key.replace("_", " ").title() or "—", "#6B7280", "#F3F4F6")
+            )
+
+            with st.container(border=True):
+                col_main, col_btn = st.columns([5, 1])
+                with col_main:
+                    # Topic + badges
+                    st.markdown(f"""
+                        <div style="font-size:1.1rem;font-weight:800;color:#0B0A18;
+                                    line-height:1.3;letter-spacing:-0.015em;margin-bottom:0.5rem;">
+                            {s["topic"]}
+                        </div>
+                        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+                            <span style="background:{arch_bg};color:{arch_fg};padding:3px 9px;
+                                         border-radius:8px;font-size:0.7rem;font-weight:700;
+                                         display:inline-flex;align-items:center;gap:0.3rem;">
+                                {arch_icon} {arch_label}
+                            </span>
+                            <span style="background:white;border:1.5px solid {score_color};color:{score_color};
+                                         padding:2px 9px;border-radius:8px;font-size:0.7rem;font-weight:800;
+                                         display:inline-flex;align-items:center;gap:0.25rem;">
+                                ⚡ {score}/10
+                            </span>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                    # Analytical breakdown
+                    if s.get("first_slide_hook_preview"):
+                        st.markdown(
+                            f"""<div style="background:#F9FAFB;border-left:3px solid #7C3AED;
+                                            padding:0.5rem 0.8rem;border-radius:0 8px 8px 0;
+                                            margin-bottom:0.5rem;font-size:0.82rem;color:#374151;
+                                            line-height:1.4;">
+                                <span style="color:#7C3AED;font-weight:700;">PIERWSZY SLAJD:</span>
+                                <span style="font-weight:600;">"{s["first_slide_hook_preview"]}"</span>
+                            </div>""",
+                            unsafe_allow_html=True,
+                        )
+
+                    if s.get("target_pain"):
+                        st.markdown(
+                            f"""<div style="font-size:0.78rem;color:#374151;line-height:1.5;margin-bottom:0.2rem;">
+                                <span style="color:#DC2626;font-weight:700;">🎯 TARGET PAIN:</span> {s["target_pain"]}
+                            </div>""",
+                            unsafe_allow_html=True,
+                        )
+                    if s.get("value_in_carousel"):
+                        st.markdown(
+                            f"""<div style="font-size:0.78rem;color:#374151;line-height:1.5;margin-bottom:0.2rem;">
+                                <span style="color:#059669;font-weight:700;">💎 VALUE:</span> {s["value_in_carousel"]}
+                            </div>""",
+                            unsafe_allow_html=True,
+                        )
+                    if s.get("conversion_angle"):
+                        st.markdown(
+                            f"""<div style="font-size:0.78rem;color:#374151;line-height:1.5;">
+                                <span style="color:#B45309;font-weight:700;">💰 KONWERSJA:</span> {s["conversion_angle"]}
+                            </div>""",
+                            unsafe_allow_html=True,
+                        )
+
+                with col_btn:
+                    st.markdown('<div style="padding-top:0.6rem;"></div>', unsafe_allow_html=True)
+                    if st.button(
+                        "Użyj →",
+                        key=f"use_topic_{i}",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        st.session_state["topic_input"] = s["topic"]
+                        st.session_state["topic_suggestions"] = []
+                        st.toast(f"✅ Wybrano: {s['topic'][:60]}", icon="🎯")
+                        st.rerun()
+
+        # Action row
+        action_col1, action_col2 = st.columns([1, 1])
+        with action_col1:
+            if st.button("🔁 Wygeneruj inne 5", use_container_width=True, key="regen_topics"):
+                st.session_state["topic_suggestions"] = []
+                st.session_state["topic_ai_loading"] = True
+                st.rerun()
+        with action_col2:
+            if st.button("✖ Schowaj pomysły", use_container_width=True, key="hide_topics"):
+                st.session_state["topic_suggestions"] = []
+                st.rerun()
+
+    st.markdown('<div style="margin-top:0.8rem;"></div>', unsafe_allow_html=True)
+
+
 def render_generate(brand_id: str):
     page_header(
         "Generator karuzel",
@@ -359,16 +532,25 @@ def render_generate(brand_id: str):
     # ── Panel aktywnych i ukończonych jobów (auto-refresh co 2s) ──────────────
     _render_jobs_panel(brand_id)
 
+    # ── AI: wymyśl najlepszy temat ─────────────────────────────────────────────
+    _render_topic_ai_section(brand_id, brief)
+
     # ── Formularz generacji ────────────────────────────────────────────────────
     section_title("Parametry generacji", icon="⚙️")
+
+    # Inicjalizacja powiązanego pola tekstowego (sterowane z sekcji AI powyżej)
+    if "topic_input" not in st.session_state:
+        st.session_state["topic_input"] = ""
 
     with st.form("generate_carousel"):
         topic = st.text_area(
             "Temat karuzeli",
+            key="topic_input",
             placeholder=(
                 "np. '3 błędy które niszczą dietę keto'\n"
                 "'Dlaczego nie chudniesz mimo diety'\n"
-                "'Jak zacząć keto w 7 dni bez efektu jojo'"
+                "'Jak zacząć keto w 7 dni bez efektu jojo'\n\n"
+                "👉 Albo kliknij 'AI: 5 najlepszych pomysłów' powyżej"
             ),
             height=110,
             help="Im bardziej konkretny i wiralowy temat, tym lepsza karuzela."
