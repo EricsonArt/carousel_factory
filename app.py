@@ -123,7 +123,7 @@ with st.sidebar:
 
     st.markdown('<hr style="border-top:1px solid #EAE8F2;margin:1.1rem 0;">', unsafe_allow_html=True)
 
-    with st.expander("➕  Nowa marka"):
+    with st.expander("Nowa marka"):
         with st.form("new_brand"):
             new_name = st.text_input("Nazwa marki", placeholder="np. KetoPro")
             new_niche = st.text_input("Nisza", placeholder="np. keto / odchudzanie")
