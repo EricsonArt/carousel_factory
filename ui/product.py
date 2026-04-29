@@ -69,7 +69,7 @@ def render_product(brand_id: str):
             )
         with col_a:
             price_anchor = st.number_input(
-                "Cena „przekreślona" (opc.)",
+                "Cena 'przekreslona' (opc.)",
                 value=float(brief.get("price_anchor") or 0),
                 min_value=0.0, step=10.0, format="%.2f",
                 help="Stara/regularna cena dla efektu okazji. Zostaw 0 jeśli brak.",
