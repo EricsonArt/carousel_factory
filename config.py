@@ -133,7 +133,9 @@ DEFAULT_SLIDES = 7
 ASSETS_FONTS_DIR = BASE_DIR / "assets" / "fonts"
 
 _FONT_BOLD_CANDIDATES = [
-    ASSETS_FONTS_DIR / "Inter-Variable.ttf",                                 # bundled, full Polish (preferred)
+    ASSETS_FONTS_DIR / "Montserrat-Black.ttf",                               # bundled, TikTok-style (preferred)
+    ASSETS_FONTS_DIR / "Montserrat-Bold.ttf",                                # bundled fallback
+    ASSETS_FONTS_DIR / "Inter-Variable.ttf",                                 # bundled fallback
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),            # Streamlit Cloud / Debian
     Path("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),    # Linux alt
     Path("/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"),             # Linux alt
@@ -144,7 +146,9 @@ _FONT_BOLD_CANDIDATES = [
 ]
 
 _FONT_REGULAR_CANDIDATES = [
-    ASSETS_FONTS_DIR / "Inter-Variable.ttf",                                 # bundled, full Polish
+    ASSETS_FONTS_DIR / "Montserrat-Bold.ttf",                                # bundled, body in Bold (TikTok readability)
+    ASSETS_FONTS_DIR / "Montserrat-Regular.ttf",                             # bundled fallback
+    ASSETS_FONTS_DIR / "Inter-Variable.ttf",                                 # bundled fallback
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
     Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
     Path("/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
@@ -170,7 +174,8 @@ SLIDE_FONT_HEADLINE = _find_first_existing(_FONT_BOLD_CANDIDATES)
 SLIDE_FONT_BODY = _find_first_existing(_FONT_REGULAR_CANDIDATES)
 SLIDE_TEXT_COLOR = "#FFFFFF"
 SLIDE_TEXT_STROKE = "#000000"
-SLIDE_TEXT_STROKE_WIDTH = 4
+SLIDE_TEXT_STROKE_WIDTH = 8        # TikTok-style mocny czarny obrys (Montserrat Black + 8px)
+SLIDE_TEXT_STROKE_WIDTH_BODY = 5   # body trochę cieńszy
 
 
 # ─────────────────────────────────────────────────────────────

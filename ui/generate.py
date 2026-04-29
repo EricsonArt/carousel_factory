@@ -73,6 +73,7 @@ def _run_generation_job(jobs: dict, job_id: str, brand_id: str, params: dict):
             image_quality=params.get("image_quality", "low"),
             model_override=params.get("model_override"),
             language=params.get("language", "pl"),
+            text_mode=params.get("text_mode", "overlay"),
             progress_callback=cb,
         )
         jobs[job_id]["carousel"] = carousel
@@ -311,6 +312,29 @@ def render_generate(brand_id: str):
                 st.caption(f"✓ Użyję {_ref_count} zdjęć referencyjnych ze stylu **{_selected_style['name']}** do style transfer.")
             else:
                 st.caption("⚠️ Wybrany styl nie ma zdjęć referencyjnych — AI wygeneruje obrazy z samego opisu (gorszy efekt). Dodaj 5-10 zdjęć w Style Library.")
+
+        st.markdown('<div style="margin-top:0.5rem;"></div>', unsafe_allow_html=True)
+
+        # ── Tryb tekstu ────────────────────────────────────────────────────
+        text_mode_options = {
+            "overlay": "✍️ Pillow overlay  —  Montserrat Black + czarny obrys (TikTok style), 100% poprawne polskie znaki",
+            "inline":  "🤖 AI wbudowany  —  tekst generowany razem z obrazem (Nano Banana Pro / GPT Image 2). Eksperymentalne, może masakrować polski",
+        }
+        text_mode = st.selectbox(
+            "📝 Tekst na slajdach",
+            options=list(text_mode_options.keys()),
+            format_func=lambda k: text_mode_options[k],
+            index=0,
+            help=(
+                "Pillow = pewniak: gwarantowane diakrytyki PL, czcionka jak na TikToku, szybkie. "
+                "AI wbudowany = wygląda spójniej z obrazem (jeden styl wizualny), ale modele AI "
+                "czasem gubią litery, szczególnie polskie. Spróbuj obu i porównaj."
+            ),
+        )
+        if text_mode == "inline" and not use_ai_images:
+            st.caption("⚠️ Tryb 'AI wbudowany' wymaga generatora AI (Nano Banana / GPT Image). Wybierz model wyżej.")
+        if text_mode == "inline" and language == "pl":
+            st.caption("⚠️ AI inline + język polski = ryzyko zmasakrowanych ą/ę/ś/ć. Dla polskiego bezpieczniej zostać przy Pillow.")
         submitted = st.form_submit_button("🎠 Generuj karuzelę", type="primary", use_container_width=True)
 
     if submitted:
@@ -327,6 +351,7 @@ def render_generate(brand_id: str):
             "image_quality": image_quality,
             "model_override": model_override,
             "language": language,
+            "text_mode": text_mode,
         })
         st.success(
             f"✅ Karuzela ruszyła w tle (job `{job_id}`). "

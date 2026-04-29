@@ -20,6 +20,10 @@ from config import (
     SLIDE_TEXT_COLOR, SLIDE_TEXT_STROKE, SLIDE_TEXT_STROKE_WIDTH,
     DEFAULT_SLIDES, MIN_SLIDES, MAX_SLIDES,
 )
+try:
+    from config import SLIDE_TEXT_STROKE_WIDTH_BODY
+except ImportError:
+    SLIDE_TEXT_STROKE_WIDTH_BODY = max(2, SLIDE_TEXT_STROKE_WIDTH - 3)
 from core.llm import call_claude_json, validate_against_brief
 from core.image_router import generate_image, QuotaExhausted, ImageGenerationError
 from core.utils import (
@@ -109,14 +113,31 @@ def render_slide_image(
     prefer_provider: Optional[str] = None,
     image_quality: str = "low",
     model_override: Optional[str] = None,
+    text_mode: str = "overlay",
 ) -> dict:
     """
-    Generuje obraz tla + naklada tekst Pillow.
+    Generuje obraz tla + tekst.
+    text_mode:
+      - "overlay" (default) — Pillow naklada tekst po wygenerowaniu obrazu (PL znaki gwarantowane)
+      - "inline"  — model AI generuje tekst RAZEM z obrazem (TikTok-style, ale moze masakrowac PL)
     Zwraca {"image_path": ..., "image_provider": ..., "image_model": ...}
     """
     headline = slide.get("headline", "")
     body = slide.get("body", "")
     image_focus = slide.get("image_focus", "center")
+
+    # Tekst do wstrzykniecia w obraz (tylko dla trybu inline)
+    inline_text_payload = None
+    if text_mode == "inline" and use_ai_images:
+        # Headline jako glowna linia + body jako mniejszy podtytul
+        ht = (headline or "").strip().upper()
+        bt = (body or "").strip()
+        if ht and bt:
+            inline_text_payload = f"{ht}\n\n{bt}"
+        elif ht:
+            inline_text_payload = ht
+        elif bt:
+            inline_text_payload = bt
 
     if use_ai_images:
         image_prompt = slide.get("image_prompt", "")
@@ -140,6 +161,7 @@ def render_slide_image(
                 prefer_provider=prefer_provider,
                 quality=image_quality,
                 model_override=model_override,
+                inline_text=inline_text_payload,
             )
         except (QuotaExhausted, ImageGenerationError):
             result = {
@@ -148,21 +170,25 @@ def render_slide_image(
                 "model": "solid_color",
                 "cost_usd": 0.0,
             }
+            # Fallback nie ma tekstu — wymus overlay
+            inline_text_payload = None
     else:
-        # Domyślnie: gradient/solid z palety stylu — szybko, bez kosztów
+        # Bez AI: gradient z palety + zawsze Pillow overlay
         result = {
             "image_bytes": _gradient_background_with_palette(style),
             "provider": "local",
             "model": "gradient",
             "cost_usd": 0.0,
         }
+        inline_text_payload = None
 
-    # Otworz w Pillow i nakladaj tekst
     img = Image.open(io.BytesIO(result["image_bytes"])).convert("RGB")
     img = img.resize((SLIDE_WIDTH, SLIDE_HEIGHT), Image.LANCZOS)
-    img = _overlay_text(img, headline, body, image_focus, style)
 
-    # Zapis
+    # Tekst nakladamy Pillowem TYLKO gdy nie wstrzyknelismy go do AI
+    if not inline_text_payload:
+        img = _overlay_text(img, headline, body, image_focus, style)
+
     ensure_dir(output_path.parent)
     img.save(output_path, "JPEG", quality=92)
 
@@ -177,34 +203,38 @@ def render_slide_image(
 def _overlay_text(img: Image.Image, headline: str, body: str,
                     focus: str, style: Optional[dict]) -> Image.Image:
     """
-    Naklada polski tekst (headline + body) na obraz.
-    Pozycja zalezy od `focus`: 'top' = naglowek u gory, body pod nim.
-                                'bottom' = na dole.
-                                'center' = srodek.
+    Naklada tekst w stylu TikTok/IG: Montserrat Black + mocny czarny obrys.
+    Bez ciemnego boxa za tekstem — sam stroke wystarcza dla czytelnosci.
     """
     if not headline and not body:
         return img
 
-    draw = ImageDraw.Draw(img)
     W, H = img.size
+    draw = ImageDraw.Draw(img)
 
-    # Wybor czcionek - rozmiary zalezne od dlugosci tekstu
-    headline_lines = wrap_text_for_slide(headline.upper() if headline else "", max_chars_per_line=18)
-    body_lines = wrap_text_for_slide(body or "", max_chars_per_line=32)
+    # Wraps - krotsze linie = wieksza czcionka = bardziej viralowy look
+    headline_lines = wrap_text_for_slide(headline.upper() if headline else "", max_chars_per_line=16)
+    body_lines = wrap_text_for_slide(body or "", max_chars_per_line=30)
 
-    head_size = _pick_font_size(headline_lines, max_size=110, min_size=64)
-    body_size = _pick_font_size(body_lines, max_size=44, min_size=28)
+    # Wieksze rozmiary fontow — TikTok mial ogromny tekst
+    head_size = _pick_font_size(headline_lines, max_size=130, min_size=72)
+    body_size = _pick_font_size(body_lines, max_size=52, min_size=34)
 
     head_font = _load_font(SLIDE_FONT_HEADLINE, head_size)
     body_font = _load_font(SLIDE_FONT_BODY, body_size)
 
-    # Oblicz wysokosc bloku
-    head_h = sum(_text_height(l, head_font) for l in headline_lines) + 8 * max(0, len(headline_lines) - 1)
-    body_h = sum(_text_height(l, body_font) for l in body_lines) + 6 * max(0, len(body_lines) - 1)
-    gap = 30 if headline_lines and body_lines else 0
+    head_line_gap = 12
+    body_line_gap = 8
+    block_gap = 36
+
+    head_h = sum(_text_height(l, head_font) for l in headline_lines) \
+             + head_line_gap * max(0, len(headline_lines) - 1)
+    body_h = sum(_text_height(l, body_font) for l in body_lines) \
+             + body_line_gap * max(0, len(body_lines) - 1)
+    gap = block_gap if headline_lines and body_lines else 0
     total_h = head_h + gap + body_h
 
-    # Pozycja Y bloku
+    # Pozycja
     if focus == "top":
         y_start = int(H * 0.08)
     elif focus == "bottom":
@@ -212,33 +242,33 @@ def _overlay_text(img: Image.Image, headline: str, body: str,
     else:
         y_start = (H - total_h) // 2
 
-    # Tlo pod tekstem - przyciemnione zeby tekst byl czytelny
-    pad = 30
-    box_top = max(0, y_start - pad)
-    box_bot = min(H, y_start + total_h + pad)
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    odraw = ImageDraw.Draw(overlay)
-    odraw.rectangle([0, box_top, W, box_bot], fill=(0, 0, 0, 100))
-    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
-    draw = ImageDraw.Draw(img)
-
-    # Render headline
+    # Render headline — Montserrat Black + grube czarne stroke
     y = y_start
     for line in headline_lines:
         x = (W - _text_width(line, head_font)) // 2
-        draw.text((x, y), line, font=head_font, fill=SLIDE_TEXT_COLOR,
-                   stroke_width=SLIDE_TEXT_STROKE_WIDTH, stroke_fill=SLIDE_TEXT_STROKE)
-        y += _text_height(line, head_font) + 8
+        draw.text(
+            (x, y), line,
+            font=head_font,
+            fill=SLIDE_TEXT_COLOR,
+            stroke_width=SLIDE_TEXT_STROKE_WIDTH,
+            stroke_fill=SLIDE_TEXT_STROKE,
+        )
+        y += _text_height(line, head_font) + head_line_gap
 
     if headline_lines and body_lines:
         y += gap
 
-    # Render body
+    # Render body — cienszy stroke
     for line in body_lines:
         x = (W - _text_width(line, body_font)) // 2
-        draw.text((x, y), line, font=body_font, fill=SLIDE_TEXT_COLOR,
-                   stroke_width=2, stroke_fill=SLIDE_TEXT_STROKE)
-        y += _text_height(line, body_font) + 6
+        draw.text(
+            (x, y), line,
+            font=body_font,
+            fill=SLIDE_TEXT_COLOR,
+            stroke_width=SLIDE_TEXT_STROKE_WIDTH_BODY,
+            stroke_fill=SLIDE_TEXT_STROKE,
+        )
+        y += _text_height(line, body_font) + body_line_gap
 
     return img
 
@@ -334,6 +364,7 @@ def generate_carousel(
     image_quality: str = "low",
     model_override: Optional[str] = None,
     language: str = "pl",
+    text_mode: str = "overlay",
     progress_callback=None,
 ) -> dict:
     """
@@ -389,6 +420,7 @@ def generate_carousel(
                 prefer_provider=prefer_provider,
                 image_quality=image_quality,
                 model_override=model_override,
+                text_mode=text_mode,
             )
         except Exception as e:
             img_meta = {

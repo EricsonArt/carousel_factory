@@ -44,6 +44,7 @@ def generate_image(
     prefer_provider: Optional[str] = None,
     quality: str = "low",
     model_override: Optional[str] = None,
+    inline_text: Optional[str] = None,
 ) -> dict:
     """
     Glowny entry point. Zwraca dict:
@@ -88,7 +89,7 @@ def generate_image(
             continue
 
         try:
-            full_prompt = _augment_prompt(prompt, style_hint)
+            full_prompt = _augment_prompt(prompt, style_hint, inline_text=inline_text)
             image_bytes = _call_provider(cfg, full_prompt, reference_images, size,
                                           quality=quality, model_override=model_override)
             increment_usage(
@@ -139,27 +140,46 @@ def _quota_exhausted(cfg: dict) -> bool:
 # AUGMENTACJA PROMPTU
 # ─────────────────────────────────────────────────────────────
 
-def _augment_prompt(prompt: str, style_hint: str) -> str:
+def _augment_prompt(prompt: str, style_hint: str, inline_text: Optional[str] = None) -> str:
     """
-    Dodaje style_hint i ogolne wskazowki kompozycyjne do prompta.
-    KRYTYCZNE: Tekst nakladamy pozniej przez Pillow (gwarantowane polskie znaki),
-    wiec model NIE MOZE generowac zadnego tekstu / liter / logo / cyfr w obrazie —
-    inaczej dostajemy belkot pod naszym tekstem.
+    Buduje finalny prompt dla generatora obrazow.
+    Dwa tryby:
+      - inline_text=None  -> ZAKAZ tekstu w obrazie (Pillow naklada potem)
+      - inline_text="..."  -> model MA umiescic ten konkretny tekst w obrazie (TikTok/IG style)
     """
     parts = [prompt.strip()]
     if style_hint:
         parts.append(f"Visual style reference: {style_hint.strip()}")
-    parts.append(
-        "Pure background image only. Vertical 4:5 portrait aspect ratio. "
-        "Clean composition with large empty area at the center or bottom where text will be added later. "
-        "High quality, professional photography or illustration matching the reference style."
-    )
-    # Bardzo mocny negative prompt — modele image-gen masakruja tekst
-    parts.append(
-        "ABSOLUTELY NO TEXT. NO LETTERS. NO WORDS. NO NUMBERS. NO LOGOS. NO WATERMARKS. "
-        "NO TYPOGRAPHY. NO CAPTIONS. NO SUBTITLES. NO SIGNAGE WITH READABLE TEXT. "
-        "The image must be completely free of any written characters or symbols."
-    )
+
+    if inline_text:
+        # AI generuje tekst razem z obrazem (Nano Banana Pro / GPT Image 2 sa w tym dobre)
+        parts.append(
+            f'IMPORTANT TEXT TO RENDER IN THE IMAGE (must appear exactly as written, large, '
+            f'centered, highly readable): "{inline_text.strip()}"'
+        )
+        parts.append(
+            "Render this text in the style of viral TikTok / Instagram Reels captions: "
+            "very bold sans-serif typography (Montserrat Black or similar), pure white fill color, "
+            "thick solid black outline/stroke around every letter, ALL CAPS for the headline, "
+            "high contrast against the background, perfectly legible. "
+            "The text is the focal point of the image — make it large and dominant."
+        )
+        parts.append(
+            "Vertical 4:5 portrait aspect ratio. Spell every word EXACTLY as given — "
+            "no typos, no extra words, no language drift."
+        )
+    else:
+        # Pillow naklada tekst pozniej — model ma zostawic czyste tlo
+        parts.append(
+            "Pure background image only. Vertical 4:5 portrait aspect ratio. "
+            "Clean composition with large empty area at the center or bottom where text will be added later. "
+            "High quality, professional photography or illustration matching the reference style."
+        )
+        parts.append(
+            "ABSOLUTELY NO TEXT. NO LETTERS. NO WORDS. NO NUMBERS. NO LOGOS. NO WATERMARKS. "
+            "NO TYPOGRAPHY. NO CAPTIONS. NO SUBTITLES. NO SIGNAGE WITH READABLE TEXT. "
+            "The image must be completely free of any written characters or symbols."
+        )
     return ". ".join(parts)
 
 
