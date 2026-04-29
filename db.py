@@ -170,6 +170,9 @@ def _migrate_brand_briefs(conn):
         "main_promise": "TEXT",
         "urgency_hooks": "TEXT",
         "cta_text": "TEXT",
+        "icp_summary": "TEXT",
+        "icp_channels": "TEXT",       # JSON list[str]
+        "anti_avatar": "TEXT",
     }
     for col, col_type in new_cols.items():
         if col not in existing:
@@ -281,7 +284,7 @@ def delete_brand(brand_id: str):
 
 _BRIEF_JSON_FIELDS = ["usps", "avatars", "objections", "guarantees",
                        "social_proof", "forbidden_claims", "raw_research",
-                       "urgency_hooks"]
+                       "urgency_hooks", "icp_channels"]
 
 
 def upsert_brief(brand_id: str, brief: dict):

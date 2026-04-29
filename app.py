@@ -405,9 +405,10 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-tab_brief, tab_product, tab_styles, tab_generate, tab_history = st.tabs([
+tab_brief, tab_product, tab_icp, tab_styles, tab_generate, tab_history = st.tabs([
     "🧠  Brief marki",
     "💰  Produkt",
+    "🎯  ICP",
     "🎨  Style",
     "🎠  Generator",
     "📜  Historia",
@@ -419,6 +420,10 @@ with tab_brief:
 with tab_product:
     from ui.product import render_product
     render_product(st.session_state.active_brand_id)
+
+with tab_icp:
+    from ui.icp import render_icp
+    render_icp(st.session_state.active_brand_id)
 
 with tab_styles:
     render_style_library(st.session_state.active_brand_id)

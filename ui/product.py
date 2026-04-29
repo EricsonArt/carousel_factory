@@ -4,8 +4,9 @@ AI używa tych danych w slajdach CTA + body żeby push'ować sprzedaż.
 """
 import streamlit as st
 
-from db import get_brief, upsert_brief
+from db import get_brief, upsert_brief, get_brand
 from ui.theme import page_header, section_title
+from core.product_filler import auto_fill_product
 
 
 PRODUCT_TYPES = {
@@ -28,6 +29,57 @@ def render_product(brand_id: str):
     )
 
     brief = get_brief(brand_id) or {}
+    brand = get_brand(brand_id) or {}
+
+    # ── Sekcja AI auto-fill ───────────────────────────────────────────
+    has_data = bool(brief.get("product") or brief.get("main_promise"))
+    with st.expander(
+        "🤖 Niech AI uzupełni za mnie" if not has_data else "🤖 AI auto-fill (przepisze pola)",
+        expanded=not has_data,
+    ):
+        st.caption(
+            "Opisz krótko swój produkt 1-3 zdaniami. AI rozbuduje to o cenę, oferte, "
+            "hooki pilności, social proof, gwarancje — wszystko poniżej. "
+            "Potem możesz to ręcznie poprawić."
+        )
+
+        with st.form("ai_fill_product"):
+            short_desc = st.text_area(
+                "Krótki opis produktu",
+                placeholder=(
+                    "np. 'sprzedaję ebook o keto za 49zł, 100 przepisów + plan 30-dniowy, "
+                    "gwarancja 30 dni zwrotu, do tej pory kupiło ponad 3000 osób'"
+                ),
+                height=110,
+            )
+            extra = st.text_input(
+                "Dodatkowy kontekst (opc.)",
+                placeholder="np. URL strony sprzedażowej / link do landing page",
+            )
+            submitted_ai = st.form_submit_button(
+                "🤖 Uzupełnij za mnie", type="primary", use_container_width=True
+            )
+
+        if submitted_ai:
+            if not short_desc.strip():
+                st.error("Wpisz krótki opis produktu — AI musi mieć z czego korzystać.")
+            else:
+                try:
+                    with st.spinner("AI generuje brief sprzedażowy..."):
+                        filled = auto_fill_product(
+                            brand_name=brand.get("name", ""),
+                            niche=brand.get("niche", ""),
+                            short_description=short_desc,
+                            extra_context=extra,
+                        )
+                    upsert_brief(brand_id, filled)
+                    st.success("✅ Wypełniłem pola — sprawdź poniżej i popraw co chcesz.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Błąd AI: {e}")
+                    st.exception(e)
+
+    st.markdown('<hr>', unsafe_allow_html=True)
 
     with st.form("product_form"):
         section_title("Co sprzedajesz?", icon="📦")
