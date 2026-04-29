@@ -146,8 +146,9 @@ def render_generate(brand_id: str):
         if _GEMINI_KEY:
             _img_options["gemini"] = "🟢 Gemini 2.0 Flash (Nano Banana)  —  GRATIS, ~40s"
         if _OAI_KEY:
-            _img_options["openai_low"]  = "💛 OpenAI gpt-image-1  low quality  —  ~$0.08/karuzela, ~2 min"
-            _img_options["openai_high"] = "🔴 OpenAI gpt-image-1  high quality  —  ~$1.20/karuzela, ~4 min"
+            _img_options["openai_v1_low"]  = "💛 OpenAI gpt-image-1  low quality  —  ~$0.08/karuzela, ~2 min"
+            _img_options["openai_v1_high"] = "🟠 OpenAI gpt-image-1  high quality  —  ~$1.20/karuzela, ~4 min"
+            _img_options["openai_v2"]      = "🔴 OpenAI gpt-image-2  (najnowszy, kwiecień 2026)"
 
         img_mode = st.selectbox(
             "🖼️ Generator tła slajdów",
@@ -156,8 +157,12 @@ def render_generate(brand_id: str):
             index=0,
         )
         use_ai_images   = img_mode != "none"
-        prefer_provider = {"gemini": "gemini", "openai_low": "openai", "openai_high": "openai"}.get(img_mode)
-        image_quality   = {"openai_low": "low", "openai_high": "high"}.get(img_mode, "low")
+        prefer_provider = {
+            "gemini": "gemini",
+            "openai_v1_low": "openai", "openai_v1_high": "openai", "openai_v2": "openai",
+        }.get(img_mode)
+        image_quality   = {"openai_v1_low": "low", "openai_v1_high": "high", "openai_v2": "high"}.get(img_mode, "low")
+        model_override  = {"openai_v2": "gpt-image-2"}.get(img_mode)
 
         submitted = st.form_submit_button("🎠 Generuj karuzelę", type="primary", use_container_width=True)
 
@@ -180,6 +185,7 @@ def render_generate(brand_id: str):
                     use_ai_images=use_ai_images,
                     prefer_provider=prefer_provider,
                     image_quality=image_quality,
+                    model_override=model_override,
                     progress_callback=on_progress,
                 )
 

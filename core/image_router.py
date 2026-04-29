@@ -43,6 +43,7 @@ def generate_image(
     style_hint: str = "",
     prefer_provider: Optional[str] = None,
     quality: str = "low",
+    model_override: Optional[str] = None,
 ) -> dict:
     """
     Glowny entry point. Zwraca dict:
@@ -88,7 +89,8 @@ def generate_image(
 
         try:
             full_prompt = _augment_prompt(prompt, style_hint)
-            image_bytes = _call_provider(cfg, full_prompt, reference_images, size, quality=quality)
+            image_bytes = _call_provider(cfg, full_prompt, reference_images, size,
+                                          quality=quality, model_override=model_override)
             increment_usage(
                 provider=cfg["provider"],
                 model=cfg["model_id"],
@@ -157,13 +159,15 @@ def _augment_prompt(prompt: str, style_hint: str) -> str:
 # OPENAI - GPT IMAGE
 # ─────────────────────────────────────────────────────────────
 
-def _call_provider(cfg: dict, prompt: str, refs: Optional[list], size: tuple, quality: str = "low") -> bytes:
+def _call_provider(cfg: dict, prompt: str, refs: Optional[list], size: tuple,
+                    quality: str = "low", model_override: Optional[str] = None) -> bytes:
+    model_id = model_override or cfg["model_id"]
     if cfg["provider"] == "openai":
-        return _call_openai(cfg["model_id"], prompt, refs, size, quality=quality)
+        return _call_openai(model_id, prompt, refs, size, quality=quality)
     if cfg["provider"] == "gemini":
-        return _call_gemini(cfg["model_id"], prompt, refs, size)
+        return _call_gemini(model_id, prompt, refs, size)
     if cfg["provider"] == "replicate":
-        return _call_replicate(cfg["model_id"], prompt, refs, size)
+        return _call_replicate(model_id, prompt, refs, size)
     raise ImageGenerationError(f"Nieznany provider: {cfg['provider']}")
 
 

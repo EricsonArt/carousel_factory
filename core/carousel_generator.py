@@ -94,6 +94,7 @@ def render_slide_image(
     use_ai_images: bool = False,
     prefer_provider: Optional[str] = None,
     image_quality: str = "low",
+    model_override: Optional[str] = None,
 ) -> dict:
     """
     Generuje obraz tla + naklada tekst Pillow.
@@ -124,6 +125,7 @@ def render_slide_image(
                 style_hint=style_hint,
                 prefer_provider=prefer_provider,
                 quality=image_quality,
+                model_override=model_override,
             )
         except (QuotaExhausted, ImageGenerationError):
             result = {
@@ -316,6 +318,7 @@ def generate_carousel(
     use_ai_images: bool = False,
     prefer_provider: Optional[str] = None,
     image_quality: str = "low",
+    model_override: Optional[str] = None,
     progress_callback=None,
 ) -> dict:
     """
@@ -370,6 +373,7 @@ def generate_carousel(
                 use_ai_images=use_ai_images,
                 prefer_provider=prefer_provider,
                 image_quality=image_quality,
+                model_override=model_override,
             )
         except Exception as e:
             img_meta = {
