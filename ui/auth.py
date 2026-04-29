@@ -9,6 +9,12 @@ from config import APP_PASSWORD
 
 _AUTH_CSS = """
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, sans-serif !important;
+}
+
 section[data-testid="stSidebar"] { display: none !important; }
 [data-testid="stToolbar"] { display: none !important; }
 #MainMenu { visibility: hidden; }
@@ -70,11 +76,6 @@ header { visibility: hidden; }
     border: 1px solid rgba(239,68,68,0.3) !important;
     border-radius: 10px !important;
     color: #FCA5A5 !important;
-}
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
-html, body, [class*="css"] {
-    font-family: 'Inter', -apple-system, sans-serif !important;
 }
 </style>
 """

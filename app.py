@@ -262,7 +262,7 @@ if not st.session_state.active_brand_id:
             <span style="width:6px;height:6px;border-radius:50%;
                          background:linear-gradient(135deg,#10B981,#059669);
                          box-shadow:0 0 8px rgba(16,185,129,0.6);"></span>
-            Phase 1 · v0.2.0 · Manual generation ready
+            Phase 1 · v0.3.0 · Manual generation ready
         </div>
 
         <div class="hero-icon" style="font-size:5rem;margin-bottom:1.2rem;

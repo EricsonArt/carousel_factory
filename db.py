@@ -281,7 +281,7 @@ def get_brief(brand_id: str) -> Optional[dict]:
 def _recompute_brief_completion(brand_id: str):
     """Liczy kompletnosc briefa jako % wypelnionych pol."""
     brief = get_brief(brand_id) or {}
-    required = ["product", "offer", "price", "usps", "avatars", "voice_tone",
+    required = ["product", "offer", "usps", "avatars", "voice_tone",
                 "objections", "guarantees", "cta_url"]
     filled = sum(1 for k in required if brief.get(k))
     completion = round(filled / len(required), 2)
