@@ -57,7 +57,7 @@ def render_icp(brand_id: str):
                         filled = auto_fill_icp(
                             brand_name=brand.get("name", ""),
                             niche=brand.get("niche", ""),
-                            product_description=brief.get("product", "") + " — " + brief.get("main_promise", ""),
+                            product_description=((brief.get("product") or "") + " — " + (brief.get("main_promise") or "")).strip(" —"),
                             customer_description=customer_desc,
                             extra_context=extra_ctx,
                         )
