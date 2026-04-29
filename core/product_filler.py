@@ -102,7 +102,7 @@ Pamietaj:
 
 Zwroc TYLKO JSON. Bez komentarzy.
 """
-    result = call_claude_json(prompt, system=SYSTEM_PROMPT, max_tokens=2500)
+    result = call_claude_json(prompt, system=SYSTEM_PROMPT, max_tokens=4000)
 
     # Sanitize: oczyszczanie pol pod schemat brand_briefs
     cleaned = {

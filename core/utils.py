@@ -135,15 +135,81 @@ def safe_json_loads(raw: str, default=None):
 
 
 def extract_json_block(raw: str) -> str:
-    """Wyciaga {...} z odpowiedzi LLM (czasami sa otoczone tekstem/markdownem)."""
+    """
+    Wyciaga {...} z odpowiedzi LLM (czasami sa otoczone tekstem/markdownem).
+    Jezeli JSON zostal przyciety (np. max_tokens hit), probuje go domknac
+    dopisujac brakujace `]` i `}`.
+    """
     raw = raw.strip()
     # Usun markdown code blocks
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
-        return match.group()
-    return raw
+
+    # Wyciagnij od pierwszego `{` do konca (zachlannie)
+    start = raw.find("{")
+    if start == -1:
+        return raw
+    candidate = raw[start:]
+
+    # Jezeli sie udaje sparsowac od razu — zwroc.
+    try:
+        json.loads(candidate)
+        return candidate
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Self-heal: policz nawiasy w `candidate`, ale tylko poza stringami
+    return _try_heal_truncated_json(candidate)
+
+
+def _try_heal_truncated_json(s: str) -> str:
+    """
+    Naprawia obciety JSON. Strategia: iteracyjnie ucinaj od konca po przecinku
+    i domykaj brakujace ]/}, az do skutku.
+    """
+    # 1) Spróbuj zamknac obecna treść dopisujac brakujace ]/}
+    for trim_to in _candidate_lengths(s):
+        candidate = s[:trim_to].rstrip()
+        # usun zwisajace przecinki przed nawiasami zamykajacymi
+        candidate = re.sub(r",\s*$", "", candidate)
+        if not candidate:
+            continue
+
+        # Counting nawiasów (przybliżone — nie odsiewa cudzyslowów,
+        # ale w praktyce LLM rzadko ma `{` w stringu)
+        ob = candidate.count("{") - candidate.count("}")
+        obb = candidate.count("[") - candidate.count("]")
+        if ob < 0 or obb < 0:
+            continue
+
+        # Jezeli ostatnim non-ws char jest `:` to znaczy ze klucz nie ma wartosci — pomin
+        if candidate.rstrip().endswith(":"):
+            continue
+        # Jezeli ostatnim jest `"` w pozycji klucza — tez pomin
+        # (proba parse i tak rzuci, mozemy ufac fallback)
+
+        attempt = candidate + ("]" * obb) + ("}" * ob)
+        try:
+            json.loads(attempt)
+            return attempt
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    return s  # fallback — niech `safe_json_loads` zwroci None
+
+
+def _candidate_lengths(s: str):
+    """Generator pozycji do prob ucinania — od pelnej dlugosci do ostatnich N przecinków."""
+    yield len(s)
+    # Spróbuj kolejne pozycje przecinkow od konca
+    positions = [i for i, ch in enumerate(s) if ch == ","]
+    for p in reversed(positions[-50:]):
+        yield p
+    # Spróbuj pozycje zamkniec nawiasow
+    for ch_target in "}]":
+        positions = [i + 1 for i, ch in enumerate(s) if ch == ch_target]
+        for p in reversed(positions[-30:]):
+            yield p
 
 
 # ─────────────────────────────────────────────────────────────

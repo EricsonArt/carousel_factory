@@ -104,7 +104,7 @@ Pamietaj:
 
 Zwroc TYLKO JSON.
 """
-    result = call_claude_json(prompt, system=SYSTEM_PROMPT, max_tokens=3500)
+    result = call_claude_json(prompt, system=SYSTEM_PROMPT, max_tokens=8000)
 
     # Sanitize avatars
     avatars = result.get("avatars") or []
