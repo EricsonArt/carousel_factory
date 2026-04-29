@@ -84,23 +84,23 @@ CLAUDE_FAST_MODEL = "claude-haiku-4-5-20251001"  # walidacja, krotkie taski
 # Kaskada: probujemy primary -> jesli quota wyczerpana -> secondary -> fallback
 IMAGE_MODELS = [
     {
-        "name": "gemini-2.0-flash",
+        # Nano Banana Pro - najnowszy Gemini image model (Gemini 3 Pro Image, listopad 2025)
+        # 4K output, najlepszy style transfer, advanced reasoning
+        "name": "nano-banana-pro",
         "provider": "gemini",
-        "model_id": "gemini-2.0-flash-exp",
+        "model_id": "gemini-3-pro-image-preview",
         "supports_reference": True,
-        "best_for": "styl",
-        # Gemini 2.0 Flash image generation: free tier (15 req/min, 1500/dzień)
-        "cost_per_image": 0.00,
-        "daily_quota": 1000,
+        "best_for": "styl + jakość",
+        "cost_per_image": 0.00,  # free tier dostępny
+        "daily_quota": 500,
     },
     {
-        "name": "gpt-image-1-low",
+        "name": "gpt-image-2",
         "provider": "openai",
-        "model_id": "gpt-image-1",
+        "model_id": "gpt-image-2",
         "supports_reference": True,
-        "best_for": "tekst",
-        # gpt-image-1 low quality 1024x1024: $0.011/obraz
-        "cost_per_image": 0.011,
+        "best_for": "tekst + jakość",
+        "cost_per_image": 0.04,  # high quality estimate
         "daily_quota": 200,
     },
     {

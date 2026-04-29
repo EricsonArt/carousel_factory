@@ -141,14 +141,16 @@ def render_generate(brand_id: str):
         except Exception:
             from config import GEMINI_API_KEY as _GEMINI_KEY, OPENAI_API_KEY as _OAI_KEY
 
-        # Kolejność: najlepszy AI na górze (style transfer z reference images), gradient na dole jako fallback
+        # Kolejność: top quality AI na górze (style transfer z reference images), gradient na dole jako fallback
         _img_options: dict[str, str] = {}
         if _GEMINI_KEY:
-            _img_options["gemini"] = "🟢 Gemini 2.0 Flash (Nano Banana)  —  STYLE TRANSFER z Twoich referencji, GRATIS, ~40s"
+            _img_options["nano_banana_pro"]  = "🟢 Nano Banana Pro (Gemini 3 Pro Image)  —  TOP JAKOŚĆ, 4K, style transfer, GRATIS"
+            _img_options["nano_banana_2"]    = "🟢 Nano Banana 2 (Gemini 3.1 Flash)  —  szybkie + style transfer, GRATIS"
+            _img_options["nano_banana_v25"]  = "🟢 Nano Banana (Gemini 2.5 Flash Image)  —  klasyk, GRATIS"
         if _OAI_KEY:
-            _img_options["openai_v1_low"]  = "💛 OpenAI gpt-image-1  low quality  —  ~$0.08/karuzela, ~2 min"
-            _img_options["openai_v1_high"] = "🟠 OpenAI gpt-image-1  high quality  —  ~$1.20/karuzela, ~4 min"
-            _img_options["openai_v2"]      = "🔴 OpenAI gpt-image-2  (najnowszy, kwiecień 2026)"
+            _img_options["openai_v2"]        = "🔴 GPT Image 2 (OpenAI 21.04.2026)  —  najnowszy, reasoning, czytelny tekst"
+            _img_options["openai_v1_high"]   = "🟠 gpt-image-1 high quality  —  starszy, ~$1.20/karuzela"
+            _img_options["openai_v1_low"]    = "💛 gpt-image-1 low quality  —  starszy, ~$0.08/karuzela"
         _img_options["none"] = "⚠️ Gradient z palety (BEZ AI — tylko 2 kolory tła)"
 
         img_mode = st.selectbox(
@@ -157,27 +159,33 @@ def render_generate(brand_id: str):
             format_func=lambda k: _img_options[k],
             index=0,
             help=(
-                "Style transfer (Gemini) wgrywa Twoje zdjęcia ze Style Library jako referencję — "
-                "AI tworzy obrazy w tym samym stylu. Gradient to ostateczność gdy nic innego nie działa."
+                "Nano Banana Pro to najlepszy darmowy model do replikacji stylu. "
+                "GPT Image 2 lepszy gdy potrzebujesz zdjęć produktów ze sklepu. "
+                "Gradient to fallback gdy nic innego nie działa."
             ),
         )
+
+        prefer_provider = {
+            "nano_banana_pro": "gemini", "nano_banana_2": "gemini", "nano_banana_v25": "gemini",
+            "openai_v1_low": "openai", "openai_v1_high": "openai", "openai_v2": "openai",
+        }.get(img_mode)
+        image_quality = {"openai_v1_low": "low", "openai_v1_high": "high", "openai_v2": "high"}.get(img_mode, "low")
+        model_override = {
+            "nano_banana_pro": "gemini-3-pro-image-preview",
+            "nano_banana_2":   "gemini-3.1-flash-image-preview",
+            "nano_banana_v25": "gemini-2.5-flash-image",
+            "openai_v2":       "gpt-image-2",
+        }.get(img_mode)
+        use_ai_images = img_mode != "none"
 
         # Info gdy user wybrał AI a nie ma stylu z referencjami
         _selected_style = next((s for s in styles if s["id"] == style_id), None) if style_id else None
         _ref_count = len(_selected_style.get("reference_image_paths") or []) if _selected_style else 0
-        if img_mode in ("gemini", "openai_v1_low", "openai_v1_high", "openai_v2"):
+        if use_ai_images:
             if _ref_count > 0:
                 st.caption(f"✓ Użyję {_ref_count} zdjęć referencyjnych ze stylu **{_selected_style['name']}** do style transfer.")
             else:
                 st.caption("⚠️ Wybrany styl nie ma zdjęć referencyjnych — AI wygeneruje obrazy z samego opisu (gorszy efekt). Dodaj 5-10 zdjęć w Style Library.")
-        use_ai_images   = img_mode != "none"
-        prefer_provider = {
-            "gemini": "gemini",
-            "openai_v1_low": "openai", "openai_v1_high": "openai", "openai_v2": "openai",
-        }.get(img_mode)
-        image_quality   = {"openai_v1_low": "low", "openai_v1_high": "high", "openai_v2": "high"}.get(img_mode, "low")
-        model_override  = {"openai_v2": "gpt-image-2"}.get(img_mode)
-
         submitted = st.form_submit_button("🎠 Generuj karuzelę", type="primary", use_container_width=True)
 
     if submitted:

@@ -190,7 +190,8 @@ def _call_openai(model_id: str, prompt: str, refs: Optional[list], size: tuple, 
         raise ImageGenerationError("Brak pakietu openai. pip install openai")
 
     client = OpenAI(api_key=OPENAI_API_KEY)
-    openai_size = "1024x1024"
+    # Karuzele 4:5 — portrait dla high quality / gpt-image-2; square dla low (oszczędność)
+    openai_size = "1024x1536" if (quality == "high" or model_id == "gpt-image-2") else "1024x1024"
 
     try:
         if refs:
