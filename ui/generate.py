@@ -88,6 +88,155 @@ def _run_generation_job(jobs: dict, job_id: str, brand_id: str, params: dict):
         jobs[job_id]["finished_at"] = time.time()
 
 
+# ─────────────────────────────────────────────────────────────
+# PUBLER JOB — wysyłka też w wątku, bo upload trwa dłużej niż 2s
+# (czyli dłużej niż auto-refresh fragmentu — inaczej fragment przerywa upload)
+# ─────────────────────────────────────────────────────────────
+
+def _get_publer_jobs() -> dict:
+    return st.session_state.setdefault("publer_jobs", {})
+
+
+def _start_publer_job(carousel: dict, ig_ids: list, tt_ids: list, scheduled_iso: str) -> str:
+    jobs = _get_publer_jobs()
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {
+        "id": job_id,
+        "carousel_id": carousel["id"],
+        "status": "running",
+        "stage": "Inicjalizacja...",
+        "progress": 0.0,
+        "started_at": time.time(),
+        "finished_at": None,
+        "result": None,
+        "error": None,
+        "traceback": None,
+    }
+    thread = threading.Thread(
+        target=_run_publer_job,
+        args=(jobs, job_id, carousel, ig_ids, tt_ids, scheduled_iso),
+        daemon=True,
+    )
+    add_script_run_ctx(thread)
+    thread.start()
+    return job_id
+
+
+def _run_publer_job(jobs: dict, job_id: str, carousel: dict,
+                    ig_ids: list, tt_ids: list, scheduled_iso: str):
+    """Funkcja wątku — robi cały upload + schedule. Łapie WSZYSTKIE wyjątki."""
+    try:
+        from core.publisher_publer import PublerClient, PublerError
+
+        slides = carousel.get("slides", [])
+        image_paths = [s["image_path"] for s in slides if s.get("image_path")]
+        if not image_paths:
+            raise RuntimeError("Karuzela nie ma obrazków do wysłania.")
+
+        jobs[job_id]["stage"] = "Łączenie z Publer..."
+        jobs[job_id]["progress"] = 0.05
+
+        client = PublerClient(PUBLER_API_KEY, PUBLER_WORKSPACE_ID)
+        if not PUBLER_WORKSPACE_ID:
+            workspaces = client.get_workspaces()
+            if not workspaces:
+                raise RuntimeError(
+                    "Brak workspaces w koncie Publer. Zaloguj się na publer.com "
+                    "i sprawdź czy masz aktywny workspace."
+                )
+            client.set_workspace(str(workspaces[0].get("id", "")))
+
+        media_ids = []
+        n = len(image_paths)
+        for i, path in enumerate(image_paths):
+            jobs[job_id]["stage"] = f"Upload obrazka {i+1}/{n}..."
+            jobs[job_id]["progress"] = 0.1 + 0.7 * (i / max(n, 1))
+            mid = client.upload_media(path)
+            media_ids.append(mid)
+
+        jobs[job_id]["stage"] = "Tworzę zaplanowany post..."
+        jobs[job_id]["progress"] = 0.85
+
+        result = client.schedule_carousel(
+            ig_account_ids=ig_ids,
+            tt_account_ids=tt_ids,
+            caption=carousel.get("caption", ""),
+            hashtags=carousel.get("hashtags") or [],
+            media_ids=media_ids,
+            scheduled_at=scheduled_iso,
+        )
+
+        publer_post_id = str(
+            result.get("id")
+            or (result.get("data") or {}).get("id")
+            or result.get("job_id")
+            or "ok"
+        )
+        update_carousel(carousel["id"], publer_post_id=publer_post_id, status="scheduled")
+
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["progress"] = 1.0
+        jobs[job_id]["stage"] = "Gotowe"
+        jobs[job_id]["result"] = {"post_id": publer_post_id, "raw": result}
+
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["traceback"] = traceback.format_exc()
+    finally:
+        jobs[job_id]["finished_at"] = time.time()
+
+
+def _run_publer_diagnostic():
+    """Synchroniczny test API Publer — pokazuje krok po kroku co działa, a co nie."""
+    from core.publisher_publer import PublerClient, PublerError
+
+    st.markdown("---")
+    st.markdown("**🩺 Diagnostyka Publer API**")
+
+    if not PUBLER_API_KEY:
+        st.error("❌ PUBLER_API_KEY pusty — dodaj do Streamlit Secrets.")
+        return
+
+    masked = PUBLER_API_KEY[:6] + "..." + PUBLER_API_KEY[-4:] if len(PUBLER_API_KEY) > 10 else "(za krótki)"
+    st.caption(f"Klucz API: `{masked}` ({len(PUBLER_API_KEY)} znaków)")
+    st.caption(f"Workspace ID z Secrets: `{PUBLER_WORKSPACE_ID or '(brak — będzie auto-fetch)'}`")
+
+    try:
+        client = PublerClient(PUBLER_API_KEY, PUBLER_WORKSPACE_ID)
+
+        st.write("1️⃣ Pobieram listę workspaces...")
+        workspaces = client.get_workspaces()
+        st.success(f"✅ Workspaces: {len(workspaces)}")
+        if workspaces:
+            st.json([{"id": w.get("id"), "name": w.get("name")} for w in workspaces[:5]])
+            if not PUBLER_WORKSPACE_ID:
+                client.set_workspace(str(workspaces[0].get("id", "")))
+                st.caption(f"Ustawiam workspace na: `{workspaces[0].get('id')}`")
+
+        st.write("2️⃣ Pobieram konta IG/TikTok...")
+        accounts = client.get_accounts()
+        st.success(f"✅ Konta: {len(accounts)}")
+        if accounts:
+            st.json([
+                {"id": a.get("id"), "provider": a.get("provider"),
+                 "name": a.get("name") or a.get("username")}
+                for a in accounts[:10]
+            ])
+        else:
+            st.warning("⚠️ Lista kont jest pusta — w Publer dashboard połącz IG/TikTok.")
+
+        st.success("🎉 Wszystko OK — możesz wysyłać karuzele.")
+
+    except PublerError as e:
+        st.error(f"❌ Błąd API: {e}")
+        st.caption("Najczęstsze przyczyny: zły klucz, klucz wygasł, plan bez API access, "
+                    "zła nazwa nagłówka autoryzacji.")
+    except Exception as e:
+        st.error(f"❌ Nieoczekiwany błąd: {e}")
+        st.exception(e)
+
+
 @st.fragment(run_every=2)
 def _render_jobs_panel(brand_id: str):
     """Panel aktywnych i ukończonych jobów. Auto-refresh co 2s."""
@@ -457,10 +606,10 @@ def _show_publer_section(carousel: dict):
         car_id = carousel["id"]
         accounts_key = "publer_accounts"
 
-        # ── Załaduj konta ─────────────────────────────────────────────────
-        col_load, _ = st.columns([1, 3])
+        # ── Załaduj konta + Test ──────────────────────────────────────────
+        col_load, col_test, _ = st.columns([1, 1, 2])
         with col_load:
-            if st.button("🔄 Załaduj konta Publer", key=f"load_acc_{car_id}"):
+            if st.button("🔄 Załaduj konta", key=f"load_acc_{car_id}"):
                 try:
                     client = PublerClient(PUBLER_API_KEY, PUBLER_WORKSPACE_ID)
                     if not PUBLER_WORKSPACE_ID:
@@ -471,7 +620,14 @@ def _show_publer_section(carousel: dict):
                     st.session_state[accounts_key] = accounts
                     st.success(f"Załadowano {len(accounts)} kont.")
                 except PublerError as e:
-                    st.error(f"Błąd połączenia z Publer: {e}")
+                    st.error(f"Błąd połączenia: {e}")
+                except Exception as e:
+                    st.error(f"Nieoczekiwany błąd: {e}")
+                    st.exception(e)
+        with col_test:
+            if st.button("🩺 Test API", key=f"test_pub_{car_id}",
+                          help="Sprawdza klucz, workspace i listę kont — diagnostyka."):
+                _run_publer_diagnostic()
 
         accounts: list[dict] = st.session_state.get(accounts_key, [])
         if not accounts:
@@ -544,77 +700,37 @@ def _show_publer_section(carousel: dict):
 
         # ── Wyślij ────────────────────────────────────────────────────────
         st.markdown('<div style="margin-top:0.75rem;"></div>', unsafe_allow_html=True)
-        if st.button(
-            "🚀 Wyślij do Publer",
-            key=f"send_publer_{car_id}",
-            type="primary",
-            disabled=not (selected_ig or selected_tt),
-        ):
-            _send_to_publer(carousel, selected_ig, selected_tt, scheduled_iso)
+
+        # Status aktywnego/zakończonego publer joba dla tej karuzeli
+        publer_jobs = _get_publer_jobs()
+        my_pjobs = [j for j in publer_jobs.values() if j["carousel_id"] == car_id]
+        active_pjob = next((j for j in my_pjobs if j["status"] == "running"), None)
+
+        if active_pjob:
+            st.info(f"🚀 Wysyłam do Publer... {int(active_pjob['progress']*100)}% — {active_pjob['stage']}")
+            st.progress(max(0.05, min(1.0, active_pjob["progress"])))
+        else:
+            if st.button(
+                "🚀 Wyślij do Publer",
+                key=f"send_publer_{car_id}",
+                type="primary",
+                disabled=not (selected_ig or selected_tt),
+            ):
+                pjob_id = _start_publer_job(carousel, selected_ig, selected_tt, scheduled_iso)
+                st.success(f"Job ruszył w tle (`{pjob_id}`). Postęp pojawi się tutaj.")
+                st.rerun()
+
+        # Pokaż wyniki / błędy poprzednich publer-jobów dla tej karuzeli
+        for j in sorted(my_pjobs, key=lambda x: x["finished_at"] or 0, reverse=True):
+            if j["status"] == "done":
+                pid = (j.get("result") or {}).get("post_id", "ok")
+                st.success(f"✅ Karuzela zaplanowana w Publer (post id `{pid}`)")
+            elif j["status"] == "error":
+                st.error(f"❌ Błąd Publer: {j['error']}")
+                if j.get("traceback"):
+                    with st.expander("Szczegóły techniczne"):
+                        st.code(j["traceback"])
 
 
-def _send_to_publer(
-    carousel: dict,
-    ig_ids: list[str],
-    tt_ids: list[str],
-    scheduled_iso: str,
-):
-    """Upload obrazków + stworzenie zaplanowanego posta w Publer."""
-    from core.publisher_publer import PublerClient, PublerError
-
-    slides = carousel.get("slides", [])
-    image_paths = [s["image_path"] for s in slides if s.get("image_path")]
-
-    if not image_paths:
-        st.error("Brak obrazków w karuzeli.")
-        return
-
-    client = PublerClient(PUBLER_API_KEY, PUBLER_WORKSPACE_ID)
-    if not PUBLER_WORKSPACE_ID:
-        try:
-            workspaces = client.get_workspaces()
-            if workspaces:
-                client.set_workspace(str(workspaces[0].get("id", "")))
-        except PublerError as e:
-            st.error(f"Nie mogę pobrać workspace: {e}")
-            return
-
-    progress = st.progress(0.0, text="Przesyłam obrazki do Publer...")
-    media_ids: list[str] = []
-
-    try:
-        for i, path in enumerate(image_paths):
-            progress.progress(
-                (i + 0.5) / len(image_paths),
-                text=f"Przesyłam slajd {i + 1}/{len(image_paths)}...",
-            )
-            mid = client.upload_media(path)
-            media_ids.append(mid)
-
-        progress.progress(0.95, text="Tworzę zaplanowany post...")
-        result = client.schedule_carousel(
-            ig_account_ids=ig_ids,
-            tt_account_ids=tt_ids,
-            caption=carousel.get("caption", ""),
-            hashtags=carousel.get("hashtags") or [],
-            media_ids=media_ids,
-            scheduled_at=scheduled_iso,
-        )
-        progress.progress(1.0, text="Gotowe!")
-
-        publer_post_id = str(
-            result.get("id")
-            or (result.get("data") or {}).get("id")
-            or result.get("job_id")
-            or "ok"
-        )
-        update_carousel(carousel["id"], publer_post_id=publer_post_id, status="scheduled")
-        st.success(
-            f"✅ Karuzela zaplanowana w Publer! "
-            f"Publer opublikuje ją automatycznie o wyznaczonej porze."
-        )
-        st.caption(f"Publer post ID: `{publer_post_id}`")
-
-    except PublerError as e:
-        progress.empty()
-        st.error(f"Błąd Publer API: {e}")
+# _send_to_publer został zastąpiony wątkiem _start_publer_job + _run_publer_job (powyżej).
+# Synchroniczna wersja przerywała się przy auto-refresh fragmentu co 2s.
