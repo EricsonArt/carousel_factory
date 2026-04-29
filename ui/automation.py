@@ -106,11 +106,28 @@ def _render_progress(brand_id: str):
         st.markdown('<div style="margin-top:1rem;"></div>', unsafe_allow_html=True)
         pct = max(0.02, min(1.0, job.get("progress", 0.0)))
         elapsed = int(time.time() - (job.get("started_at") or time.time()))
+        stage = job.get("stage", "...")
 
         with st.container(border=True):
-            st.markdown(f"**🔄 Automatyzacja działa** — {int(pct*100)}%")
-            st.progress(pct, text=job.get("stage", "..."))
-            st.caption(f"⏱️ {elapsed}s")
+            st.markdown(
+                f"""<div style="display:flex;justify-content:space-between;align-items:baseline;
+                                margin-bottom:0.5rem;">
+                    <div style="font-size:1rem;font-weight:700;color:#0F172A;">
+                        🔄 Automatyzacja działa
+                    </div>
+                    <div style="font-size:1.1rem;font-weight:800;color:#7C3AED;">
+                        {int(pct*100)}%
+                    </div>
+                </div>
+                <div style="background:#1E293B;color:#F8FAFC;padding:0.7rem 1rem;border-radius:10px;
+                            font-size:0.9rem;font-weight:500;line-height:1.4;margin-bottom:0.6rem;
+                            font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;">
+                    {stage}
+                </div>""",
+                unsafe_allow_html=True,
+            )
+            st.progress(pct)
+            st.caption(f"⏱️ {elapsed}s   ·   strona odświeża się co 3s")
 
     elif status == "done":
         results = job.get("results", [])
