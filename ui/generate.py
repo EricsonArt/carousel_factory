@@ -134,7 +134,12 @@ def render_generate(brand_id: str):
 
         st.markdown('<div style="margin-top:0.25rem;"></div>', unsafe_allow_html=True)
 
-        from config import GEMINI_API_KEY as _GEMINI_KEY, OPENAI_API_KEY as _OAI_KEY
+        # Czytaj klucze na bieżąco (nie z cache modułu) żeby wykryć nowo dodane Secrets
+        try:
+            _GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "") or ""
+            _OAI_KEY    = st.secrets.get("OPENAI_API_KEY", "") or ""
+        except Exception:
+            from config import GEMINI_API_KEY as _GEMINI_KEY, OPENAI_API_KEY as _OAI_KEY
         _img_options: dict[str, str] = {
             "none": "🎨 Gradient z palety stylu  —  gratis, gotowe w 15s",
         }
