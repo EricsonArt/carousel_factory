@@ -135,24 +135,24 @@ def render_generate(brand_id: str):
         st.markdown('<div style="margin-top:0.25rem;"></div>', unsafe_allow_html=True)
 
         from config import GEMINI_API_KEY as _GEMINI_KEY, OPENAI_API_KEY as _OAI_KEY
+        _img_options: dict[str, str] = {
+            "none": "🎨 Gradient z palety stylu  —  gratis, gotowe w 15s",
+        }
         if _GEMINI_KEY:
-            _ai_label = "🖼️ Generuj tła AI przez Gemini 2.0 Flash (BEZPŁATNE, ~40s)"
-            _ai_help = "Gemini 2.0 Flash: darmowy tier — 1500 obrazków/dzień gratis."
-        elif _OAI_KEY:
-            _ai_label = "🖼️ Generuj tła AI przez OpenAI gpt-image-1 (~$0.08/karuzela, ~2 min)"
-            _ai_help = ("Domyślnie: gradient z palety stylu — gratis, gotowe w 15s.\n"
-                        "Zaznaczone: OpenAI low quality ($0.011/slajd × 7 = ~$0.08).\n"
-                        "Tip: dodaj GEMINI_API_KEY do Secrets — Gemini jest BEZPŁATNY!")
-        else:
-            _ai_label = "🖼️ Generuj tła AI (brak klucza API)"
-            _ai_help = "Dodaj GEMINI_API_KEY (darmowe) lub OPENAI_API_KEY do Streamlit Secrets."
+            _img_options["gemini"] = "🟢 Gemini 2.0 Flash (Nano Banana)  —  GRATIS, ~40s"
+        if _OAI_KEY:
+            _img_options["openai_low"]  = "💛 OpenAI gpt-image-1  low quality  —  ~$0.08/karuzela, ~2 min"
+            _img_options["openai_high"] = "🔴 OpenAI gpt-image-1  high quality  —  ~$1.20/karuzela, ~4 min"
 
-        use_ai_images = st.checkbox(
-            _ai_label,
-            value=False,
-            help=_ai_help,
-            disabled=not (_GEMINI_KEY or _OAI_KEY),
+        img_mode = st.selectbox(
+            "🖼️ Generator tła slajdów",
+            options=list(_img_options.keys()),
+            format_func=lambda k: _img_options[k],
+            index=0,
         )
+        use_ai_images   = img_mode != "none"
+        prefer_provider = {"gemini": "gemini", "openai_low": "openai", "openai_high": "openai"}.get(img_mode)
+        image_quality   = {"openai_low": "low", "openai_high": "high"}.get(img_mode, "low")
 
         submitted = st.form_submit_button("🎠 Generuj karuzelę", type="primary", use_container_width=True)
 
@@ -173,6 +173,8 @@ def render_generate(brand_id: str):
                     style_id=style_id,
                     slide_count=slide_count,
                     use_ai_images=use_ai_images,
+                    prefer_provider=prefer_provider,
+                    image_quality=image_quality,
                     progress_callback=on_progress,
                 )
 

@@ -42,6 +42,7 @@ def generate_image(
     size: tuple[int, int] = None,
     style_hint: str = "",
     prefer_provider: Optional[str] = None,
+    quality: str = "low",
 ) -> dict:
     """
     Glowny entry point. Zwraca dict:
@@ -87,7 +88,7 @@ def generate_image(
 
         try:
             full_prompt = _augment_prompt(prompt, style_hint)
-            image_bytes = _call_provider(cfg, full_prompt, reference_images, size)
+            image_bytes = _call_provider(cfg, full_prompt, reference_images, size, quality=quality)
             increment_usage(
                 provider=cfg["provider"],
                 model=cfg["model_id"],
@@ -156,9 +157,9 @@ def _augment_prompt(prompt: str, style_hint: str) -> str:
 # OPENAI - GPT IMAGE
 # ─────────────────────────────────────────────────────────────
 
-def _call_provider(cfg: dict, prompt: str, refs: Optional[list], size: tuple) -> bytes:
+def _call_provider(cfg: dict, prompt: str, refs: Optional[list], size: tuple, quality: str = "low") -> bytes:
     if cfg["provider"] == "openai":
-        return _call_openai(cfg["model_id"], prompt, refs, size)
+        return _call_openai(cfg["model_id"], prompt, refs, size, quality=quality)
     if cfg["provider"] == "gemini":
         return _call_gemini(cfg["model_id"], prompt, refs, size)
     if cfg["provider"] == "replicate":
@@ -166,11 +167,10 @@ def _call_provider(cfg: dict, prompt: str, refs: Optional[list], size: tuple) ->
     raise ImageGenerationError(f"Nieznany provider: {cfg['provider']}")
 
 
-def _call_openai(model_id: str, prompt: str, refs: Optional[list], size: tuple) -> bytes:
+def _call_openai(model_id: str, prompt: str, refs: Optional[list], size: tuple, quality: str = "low") -> bytes:
     """
     OpenAI Images API.
-    - size: "1024x1024" (square) — taniej niz portrait, skalujemy Pillow do SLIDE_HEIGHT
-    - jesli sa reference images, uzywamy /images/edits zamiast /images/generations.
+    quality: 'low' (~$0.011/img), 'medium' (~$0.042/img), 'high' (~$0.167/img)
     """
     try:
         from openai import OpenAI
@@ -178,20 +178,17 @@ def _call_openai(model_id: str, prompt: str, refs: Optional[list], size: tuple) 
         raise ImageGenerationError("Brak pakietu openai. pip install openai")
 
     client = OpenAI(api_key=OPENAI_API_KEY)
-    openai_size = "1024x1024"  # square — cheapest, Pillow rescales to SLIDE_HEIGHT
+    openai_size = "1024x1024"
 
     try:
         if refs:
-            # Tryb edits - reference images jako style
-            ref_files = []
-            for r in refs[:4]:  # OpenAI accepts up to 4 reference images
-                ref_files.append(_to_file_object(r))
+            ref_files = [_to_file_object(r) for r in refs[:4]]
             resp = client.images.edit(
                 model=model_id,
                 image=ref_files if len(ref_files) > 1 else ref_files[0],
                 prompt=prompt,
                 size=openai_size,
-                quality=IMAGE_QUALITY,
+                quality=quality,
                 n=1,
             )
         else:
@@ -199,7 +196,7 @@ def _call_openai(model_id: str, prompt: str, refs: Optional[list], size: tuple) 
                 model=model_id,
                 prompt=prompt,
                 size=openai_size,
-                quality=IMAGE_QUALITY,
+                quality=quality,
                 n=1,
             )
     except Exception as e:

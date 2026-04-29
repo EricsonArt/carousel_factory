@@ -92,6 +92,8 @@ def render_slide_image(
     style: Optional[dict],
     output_path: Path,
     use_ai_images: bool = False,
+    prefer_provider: Optional[str] = None,
+    image_quality: str = "low",
 ) -> dict:
     """
     Generuje obraz tla + naklada tekst Pillow.
@@ -120,6 +122,8 @@ def render_slide_image(
                 reference_images=refs[:4],
                 size=(SLIDE_WIDTH, SLIDE_HEIGHT),
                 style_hint=style_hint,
+                prefer_provider=prefer_provider,
+                quality=image_quality,
             )
         except (QuotaExhausted, ImageGenerationError):
             result = {
@@ -310,6 +314,8 @@ def generate_carousel(
     topic_id: Optional[str] = None,
     slide_count: int = DEFAULT_SLIDES,
     use_ai_images: bool = False,
+    prefer_provider: Optional[str] = None,
+    image_quality: str = "low",
     progress_callback=None,
 ) -> dict:
     """
@@ -359,7 +365,12 @@ def generate_carousel(
         slide_filename = f"{i+1:02d}_{sanitize_filename(slide.get('headline', 'slide'))}.jpg"
         slide_path = carousel_dir / slide_filename
         try:
-            img_meta = render_slide_image(slide, style, slide_path, use_ai_images=use_ai_images)
+            img_meta = render_slide_image(
+                slide, style, slide_path,
+                use_ai_images=use_ai_images,
+                prefer_provider=prefer_provider,
+                image_quality=image_quality,
+            )
         except Exception as e:
             img_meta = {
                 "image_path": "",
