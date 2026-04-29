@@ -205,7 +205,7 @@ def _get_secret_float(key: str, default: float) -> float:
         return default
 
 
-DAILY_COST_CAP_USD = _get_secret_float("DAILY_COST_CAP_USD", 5.0)
+DAILY_COST_CAP_USD = _get_secret_float("DAILY_COST_CAP_USD", 10.0)
 
 
 # ─────────────────────────────────────────────────────────────
