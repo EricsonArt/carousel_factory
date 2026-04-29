@@ -582,10 +582,10 @@ def _show_carousel_preview(carousel: dict):
 
     # Publer auto-publish section
     st.markdown('<div style="margin-top:1.5rem;"></div>', unsafe_allow_html=True)
-    _show_publer_section(carousel)
+    show_publer_section(carousel)
 
 
-def _show_publer_section(carousel: dict):
+def show_publer_section(carousel: dict):
     """Sekcja zaplanowanego wysyłania karuzeli do Publer."""
     with st.expander("📤 Wyślij do Publer (auto-publikacja)", expanded=bool(PUBLER_API_KEY)):
 

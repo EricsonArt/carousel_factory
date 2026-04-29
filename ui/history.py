@@ -6,8 +6,9 @@ from pathlib import Path
 import streamlit as st
 
 from core.carousel_generator import export_carousel_as_zip
-from db import list_carousels
+from db import list_carousels, get_carousel
 from ui.theme import page_header, section_title, empty_state
+from ui.generate import show_publer_section
 
 
 _STATUS_COLORS = {
@@ -143,3 +144,8 @@ def render_history(brand_id: str):
                     )
                 except Exception as e:
                     st.error(f"Błąd ZIP: {str(e)[:80]}")
+
+            # Publer auto-publish section — same widget as in Generator
+            st.markdown('<div style="margin-top:1rem;"></div>', unsafe_allow_html=True)
+            full_carousel = get_carousel(c["id"]) or c
+            show_publer_section(full_carousel)
