@@ -269,6 +269,11 @@ def upsert_brief(brand_id: str, brief: dict):
         if f in payload and not isinstance(payload[f], str):
             payload[f] = json.dumps(payload[f], ensure_ascii=False)
 
+    # Catch-all: serialize any remaining dict/list that SQLite can't store natively
+    for k, v in payload.items():
+        if isinstance(v, (dict, list)):
+            payload[k] = json.dumps(v, ensure_ascii=False)
+
     cols = list(payload.keys())
     placeholders = ", ".join("?" * len(cols))
     update_set = ", ".join(f"{c} = excluded.{c}" for c in cols if c != "brand_id")
