@@ -46,14 +46,33 @@ PRZYKLAD ZLE (za dlugo): "Bot skanuje Vinted w czasie rzeczywistym. W momencie g
 
 PRZYKLAD DOBRZE: "Bot skanuje Vinted 24/7 i wysyla alert gdy okazja spada ponizej rynkowej."
 
-### CTA (Ostatni slajd)
-Cel: konkretne wezwanie do akcji.
+### CTA (Ostatni slajd) — KRYTYCZNY DLA KONWERSJI
+Cel: konkretne wezwanie do akcji ktore zamienia widza w klienta.
 
 Struktura:
 1. Spelnienie obietnicy z hooka ("Wiesz juz dlaczego dieta nie dziala")
-2. Kolejny krok: konkret co zrobic ("Mam dla Ciebie pelny plan keto na 30 dni")
-3. CTA: dokladne wezwanie + powod TERAZ ("Klik link w bio - 30% rabatu tylko dzis")
-4. Soft secondary: zapis/komentarz/share
+2. Konkret oferty z briefa: nazwa produktu + main_promise + cena (+ price_anchor jako "bylo X, teraz Y")
+3. Pilnosc: WYBIERZ jeden z `urgency_hooks` z briefa (jezeli brak — uzyj generycznego "tylko dzis" / "ostatnie miejsca")
+4. Gwarancja: jeden z `guarantees` z briefa (zbija ostatnia obiekcje)
+5. CTA: doslowny tekst z `cta_text` z briefa (np. "Klik link w bio") + krotki secondary ("zapisz post zeby nie zgubic")
+
+### SALES PSYCHOLOGY — wstrzykuj w body slajdy 2-N
+
+Karuzela MA SPRZEDAWAC. Nie tylko edukowac. Patterns ktore odpalaja portfel:
+
+- **Pain amplification** (slajdy 2-3): pokaz konsekwencje problemu konkretnie
+  ("90% kobiet odpada po 2 tygodniach diety — i wraca do wagi sprzed")
+- **Social proof drop** (~slajd 4-5): wstrzyknij jeden z `social_proof` z briefa
+  ("3000+ klientek schudlo srednio 6kg w 30 dni")
+- **Objection killer** (~slajd przed CTA): wybierz jedna z `objections` z briefa i ja zbij
+  ("Mysląc 'nie mam czasu na keto'? Plan zajmuje 15 min/dzien")
+- **Mini-CTA wewnatrz body**: kazdy slajd 2-N moze konczyc sie subtle CTA do save/share
+  ("Zapisz post zeby nie zgubic" / "Wyslij koleżance ktora to potrzebuje")
+- **Urgency wcześnie nie tylko w CTA**: jezeli `urgency_hooks` istnieje, mozesz juz w slajdzie 5-6 zarzucic kotwice
+  ("PS — promocja konczy sie w niedziele, ale o tym za chwile")
+
+### Kotwica cenowa (jezeli `price_anchor` istnieje)
+W CTA zaserwuj: "Bylo {price_anchor}{currency}. Teraz {price}{currency}." — to jest WIEKSZA dzwignia niz sama cena.
 
 ## Format wyjsciowy (JSON)
 

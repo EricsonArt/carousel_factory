@@ -36,17 +36,22 @@ CREATE TABLE IF NOT EXISTS brands (
 CREATE TABLE IF NOT EXISTS brand_briefs (
     brand_id TEXT PRIMARY KEY,
     product TEXT,
+    product_type TEXT,           -- 'digital_ebook' | 'digital_course' | 'physical' | 'service' | 'saas' | 'coaching' | 'affiliate' | 'other'
     offer TEXT,
     price REAL,
     currency TEXT DEFAULT 'PLN',
+    price_anchor REAL,           -- przekreslona "stara" cena (efekt okazji)
+    main_promise TEXT,           -- 1-zdaniowa obietnica produktu
     usps TEXT,                   -- JSON list[str]
     avatars TEXT,                -- JSON list[{"name","pains","goals"}]
     objections TEXT,             -- JSON list[str]
     guarantees TEXT,             -- JSON list[str]
+    urgency_hooks TEXT,          -- JSON list[str] (pilnosc/scarcity)
     voice_tone TEXT,
     social_proof TEXT,           -- JSON list[str]
     forbidden_claims TEXT,       -- JSON list[str] (np. medyczne, income claims)
     cta_url TEXT,                -- link do strony/oferty (uzyte w CTA slajdzie)
+    cta_text TEXT,               -- tekst CTA np. "Klik link w bio"
     raw_research TEXT,           -- JSON dump z auto-researcha
     updated_at TEXT,
     FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
@@ -153,6 +158,25 @@ def init_db():
         conn.executescript(SCHEMA)
         _migrate_style_profiles(conn)
         _migrate_carousels(conn)
+        _migrate_brand_briefs(conn)
+
+
+def _migrate_brand_briefs(conn):
+    """Dodaje brakujace kolumny do brand_briefs dla starszych baz."""
+    existing = {r["name"] for r in conn.execute("PRAGMA table_info(brand_briefs)").fetchall()}
+    new_cols = {
+        "product_type": "TEXT",
+        "price_anchor": "REAL",
+        "main_promise": "TEXT",
+        "urgency_hooks": "TEXT",
+        "cta_text": "TEXT",
+    }
+    for col, col_type in new_cols.items():
+        if col not in existing:
+            try:
+                conn.execute(f"ALTER TABLE brand_briefs ADD COLUMN {col} {col_type}")
+            except sqlite3.OperationalError:
+                pass
 
 
 def _migrate_carousels(conn):
@@ -256,7 +280,8 @@ def delete_brand(brand_id: str):
 # ─────────────────────────────────────────────────────────────
 
 _BRIEF_JSON_FIELDS = ["usps", "avatars", "objections", "guarantees",
-                       "social_proof", "forbidden_claims", "raw_research"]
+                       "social_proof", "forbidden_claims", "raw_research",
+                       "urgency_hooks"]
 
 
 def upsert_brief(brand_id: str, brief: dict):

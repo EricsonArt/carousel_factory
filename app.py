@@ -150,11 +150,37 @@ with st.sidebar:
     st.markdown('<hr style="border-top:1px solid #EAE8F2;margin:1.1rem 0;">', unsafe_allow_html=True)
 
     with st.expander("Nowa marka"):
+        from ui.product import PRODUCT_TYPES
+        from db import upsert_brief
+
         with st.form("new_brand"):
             new_name = st.text_input("Nazwa marki", placeholder="np. KetoPro")
             new_niche = st.text_input("Nisza", placeholder="np. keto / odchudzanie")
             new_ig = st.text_input("Instagram handle", placeholder="@ketopro")
             new_tt = st.text_input("TikTok handle", placeholder="@ketopro_pl")
+
+            st.markdown('<hr style="border-top:1px solid #EAE8F2;margin:0.6rem 0;">',
+                        unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.7rem;color:#9CA3AF;font-weight:700;'
+                        'text-transform:uppercase;letter-spacing:0.1em;margin-bottom:0.4rem;">'
+                        'Co sprzedajesz?</div>', unsafe_allow_html=True)
+
+            new_product = st.text_input(
+                "Produkt",
+                placeholder="np. 'Ebook Keto 30 dni' / 'Kurs sprzedaży na Vinted'",
+                label_visibility="collapsed",
+            )
+            new_product_type = st.selectbox(
+                "Typ produktu",
+                options=list(PRODUCT_TYPES.keys()),
+                format_func=lambda k: PRODUCT_TYPES[k],
+                index=0,
+            )
+            new_cta_url = st.text_input(
+                "Link sprzedaży (CTA)",
+                placeholder="https://twoja-strona.pl/oferta",
+            )
+            st.caption("Resztę pól (cena, oferta, social proof) uzupełnisz w zakładce 💰 Produkt.")
 
             if st.form_submit_button("Utwórz markę", use_container_width=True):
                 if new_name.strip():
@@ -165,6 +191,13 @@ with st.sidebar:
                         niche=new_niche.strip(),
                         social_handles={"ig": new_ig.strip(), "tiktok": new_tt.strip()},
                     )
+                    if new_product.strip() or new_cta_url.strip():
+                        upsert_brief(bid, {
+                            "product": new_product.strip(),
+                            "product_type": new_product_type,
+                            "cta_url": new_cta_url.strip(),
+                            "cta_text": "Klik link w bio",
+                        })
                     st.session_state.active_brand_id = bid
                     st.success(f"Utworzono: {new_name}")
                     st.rerun()
@@ -372,8 +405,9 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-tab_brief, tab_styles, tab_generate, tab_history = st.tabs([
+tab_brief, tab_product, tab_styles, tab_generate, tab_history = st.tabs([
     "🧠  Brief marki",
+    "💰  Produkt",
     "🎨  Style",
     "🎠  Generator",
     "📜  Historia",
@@ -381,6 +415,10 @@ tab_brief, tab_styles, tab_generate, tab_history = st.tabs([
 
 with tab_brief:
     render_onboarding(st.session_state.active_brand_id)
+
+with tab_product:
+    from ui.product import render_product
+    render_product(st.session_state.active_brand_id)
 
 with tab_styles:
     render_style_library(st.session_state.active_brand_id)
