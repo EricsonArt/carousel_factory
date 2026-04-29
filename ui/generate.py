@@ -140,22 +140,36 @@ def render_generate(brand_id: str):
             _OAI_KEY    = st.secrets.get("OPENAI_API_KEY", "") or ""
         except Exception:
             from config import GEMINI_API_KEY as _GEMINI_KEY, OPENAI_API_KEY as _OAI_KEY
-        _img_options: dict[str, str] = {
-            "none": "🎨 Gradient z palety stylu  —  gratis, gotowe w 15s",
-        }
+
+        # Kolejność: najlepszy AI na górze (style transfer z reference images), gradient na dole jako fallback
+        _img_options: dict[str, str] = {}
         if _GEMINI_KEY:
-            _img_options["gemini"] = "🟢 Gemini 2.0 Flash (Nano Banana)  —  GRATIS, ~40s"
+            _img_options["gemini"] = "🟢 Gemini 2.0 Flash (Nano Banana)  —  STYLE TRANSFER z Twoich referencji, GRATIS, ~40s"
         if _OAI_KEY:
             _img_options["openai_v1_low"]  = "💛 OpenAI gpt-image-1  low quality  —  ~$0.08/karuzela, ~2 min"
             _img_options["openai_v1_high"] = "🟠 OpenAI gpt-image-1  high quality  —  ~$1.20/karuzela, ~4 min"
             _img_options["openai_v2"]      = "🔴 OpenAI gpt-image-2  (najnowszy, kwiecień 2026)"
+        _img_options["none"] = "⚠️ Gradient z palety (BEZ AI — tylko 2 kolory tła)"
 
         img_mode = st.selectbox(
             "🖼️ Generator tła slajdów",
             options=list(_img_options.keys()),
             format_func=lambda k: _img_options[k],
             index=0,
+            help=(
+                "Style transfer (Gemini) wgrywa Twoje zdjęcia ze Style Library jako referencję — "
+                "AI tworzy obrazy w tym samym stylu. Gradient to ostateczność gdy nic innego nie działa."
+            ),
         )
+
+        # Info gdy user wybrał AI a nie ma stylu z referencjami
+        _selected_style = next((s for s in styles if s["id"] == style_id), None) if style_id else None
+        _ref_count = len(_selected_style.get("reference_image_paths") or []) if _selected_style else 0
+        if img_mode in ("gemini", "openai_v1_low", "openai_v1_high", "openai_v2"):
+            if _ref_count > 0:
+                st.caption(f"✓ Użyję {_ref_count} zdjęć referencyjnych ze stylu **{_selected_style['name']}** do style transfer.")
+            else:
+                st.caption("⚠️ Wybrany styl nie ma zdjęć referencyjnych — AI wygeneruje obrazy z samego opisu (gorszy efekt). Dodaj 5-10 zdjęć w Style Library.")
         use_ai_images   = img_mode != "none"
         prefer_provider = {
             "gemini": "gemini",

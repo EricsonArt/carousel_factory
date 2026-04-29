@@ -108,9 +108,22 @@ Pisz POPRAWNIE polskie znaki: ą ę ó ł ś ć ż ź ń. NIE uzywaj ASCII podst
 
 ## Format image_prompt
 
-`image_prompt` to opis ANGIELSKIEGO promptu dla generatora obrazow (gpt-image / gemini). Opisuj SCENE, nie tekst.
+`image_prompt` to opis ANGIELSKIEGO promptu dla generatora obrazow (gpt-image / gemini).
 
-ZLE: "An image with the headline '3 błędy keto'"
-DOBRZE: "Minimal flat illustration of a person looking confused at a plate of food, pastel beige background, top-down view, room for text overlay at top"
+KRYTYCZNE ZASADY (zlamanie = obraz do wyrzucenia):
+1. Opisuj TYLKO scene wizualna (kolory, kompozycja, obiekty, oswietlenie). NIGDY nie pisz zadnych slow ktore mialyby byc napisane na obrazie - tekst nakladamy potem osobno przez Pillow.
+2. Unikaj scen z napisami: phone screens with apps, signs, billboards, books, screenshots z wiadomosciami, UI z tekstem - generator je zmasakruje na belkot.
+3. Konczyć kazdy image_prompt fraza: ", clean background, no text, no letters, no logos, no UI, no signage with text".
+4. Preferuj abstrakcyjne / fotograficzne tla: minimal product photography, abstract gradient, texture, lifestyle scene WITHOUT visible text/screens.
+
+ZLE (Gemini wygeneruje belkot):
+- "Phone screen showing Vinted app with listings"  → telefon bedzie pokazywal "Coadocy Equlardred" zamiast Vinted
+- "Person holding a sign saying STOP"  → napis bedzie zniekształcony
+- "Open book with text visible"  → tekst bedzie krzywizna
+
+DOBRZE:
+- "Minimal flat-lay of folded designer sneakers on neutral linen fabric, soft daylight, top-down composition, clean empty space at top, no text, no letters, no logos"
+- "Hand holding modern smartphone with blank dark screen, blurred kitchen background, cinematic lighting, no text, no UI, no apps visible"
+- "Abstract pastel gradient background with subtle paper texture, soft shadows, completely empty, no text, no letters"
 
 Generator OSOBNO dostanie referencje stylu (image_style ze Style Profile) - twoj prompt to TRESCIOWY input.

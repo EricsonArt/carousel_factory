@@ -142,15 +142,23 @@ def _quota_exhausted(cfg: dict) -> bool:
 def _augment_prompt(prompt: str, style_hint: str) -> str:
     """
     Dodaje style_hint i ogolne wskazowki kompozycyjne do prompta.
-    Pamietamy ze tekst NA obrazie laduje pozniej przez Pillow overlay,
-    wiec mowi modelowi "leave space for text overlay".
+    KRYTYCZNE: Tekst nakladamy pozniej przez Pillow (gwarantowane polskie znaki),
+    wiec model NIE MOZE generowac zadnego tekstu / liter / logo / cyfr w obrazie —
+    inaczej dostajemy belkot pod naszym tekstem.
     """
     parts = [prompt.strip()]
     if style_hint:
-        parts.append(f"Style: {style_hint.strip()}")
+        parts.append(f"Visual style reference: {style_hint.strip()}")
     parts.append(
-        "Composition: clean composition with empty space at top or bottom for text overlay, "
-        "high quality, vertical 4:5 aspect ratio."
+        "Pure background image only. Vertical 4:5 portrait aspect ratio. "
+        "Clean composition with large empty area at the center or bottom where text will be added later. "
+        "High quality, professional photography or illustration matching the reference style."
+    )
+    # Bardzo mocny negative prompt — modele image-gen masakruja tekst
+    parts.append(
+        "ABSOLUTELY NO TEXT. NO LETTERS. NO WORDS. NO NUMBERS. NO LOGOS. NO WATERMARKS. "
+        "NO TYPOGRAPHY. NO CAPTIONS. NO SUBTITLES. NO SIGNAGE WITH READABLE TEXT. "
+        "The image must be completely free of any written characters or symbols."
     )
     return ". ".join(parts)
 
