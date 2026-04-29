@@ -27,6 +27,7 @@ COLORS = {
 _CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Instrument+Serif:ital@0;1&display=swap');
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons|Material+Icons+Outlined|Material+Symbols+Rounded');
 
 html, body, [class*="css"], .stApp, .stApp * {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
@@ -48,6 +49,21 @@ html, body, [class*="css"], .stApp, .stApp * {
     padding-top: 2.2rem;
     padding-bottom: 4rem;
     max-width: 1180px;
+}
+
+/* === SIDEBAR COLLAPSE BUTTON — ukryj żeby nie schować paska przypadkowo === */
+section[data-testid="stSidebar"] [data-testid="stBaseButton-headerNoPadding"],
+section[data-testid="stSidebar"] button[title="Close sidebar"],
+section[data-testid="stSidebar"] button[aria-label="Close sidebar"] {
+    display: none !important;
+}
+/* Expand button (gdy sidebar ukryty) — zostaw widoczny i pokoloruj */
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"] {
+    background: rgba(109,40,217,0.12) !important;
+    border-radius: 0 10px 10px 0 !important;
+    border: 1px solid rgba(109,40,217,0.2) !important;
+    border-left: none !important;
 }
 
 /* === SIDEBAR — refined light with glass === */

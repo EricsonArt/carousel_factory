@@ -1,7 +1,9 @@
 """
 Auth gate — aktywna gdy APP_PASSWORD jest ustawione.
-Pokazuje premium login screen na ciemnym tle.
+Zapamiętuje sesję przez URL query param — po zalogowaniu odświeżenie strony
+nie wymaga ponownego logowania.
 """
+import hashlib
 import hmac
 import streamlit as st
 
@@ -31,7 +33,6 @@ header { visibility: hidden; }
     padding-right: 1rem !important;
 }
 
-/* Override form inside auth */
 [data-testid="stForm"] {
     background: rgba(255,255,255,0.04) !important;
     border: 1px solid rgba(124,58,237,0.25) !important;
@@ -81,21 +82,41 @@ header { visibility: hidden; }
 """
 
 
+def _session_token() -> str:
+    """Deterministyczny token sesji oparty o hasło — nie wymaga bazy ani pliku."""
+    return hashlib.sha256(f"karuzel_auth_{APP_PASSWORD}_2026".encode()).hexdigest()[:40]
+
+
 def require_password() -> bool:
-    """Zwraca True gdy autoryzowany lub brak hasla (tryb lokalny)."""
+    """
+    Zwraca True gdy autoryzowany lub brak hasła (tryb lokalny).
+
+    Zapamiętuje sesję przez URL query param ?s=TOKEN.
+    Po zalogowaniu odświeżenie strony nie wymaga ponownego wpisywania hasła.
+    """
     if not APP_PASSWORD:
         return True
-    if st.session_state.get("_auth_ok"):
+
+    expected = _session_token()
+
+    # 1. Sprawdź URL query param — przeżywa odświeżenie strony
+    url_token = st.query_params.get("s", "")
+    if url_token and hmac.compare_digest(url_token, expected):
+        st.session_state["_auth_ok"] = True
         return True
 
-    st.markdown(_AUTH_CSS, unsafe_allow_html=True)
+    # 2. Sprawdź session state — przeżywa reruns w tej samej sesji
+    if st.session_state.get("_auth_ok"):
+        # Wbij token w URL żeby przeżył odświeżenie
+        st.query_params["s"] = expected
+        return True
 
-    # Vertical spacing
+    # 3. Pokaż formularz logowania
+    st.markdown(_AUTH_CSS, unsafe_allow_html=True)
     st.markdown('<div style="height:7vh;"></div>', unsafe_allow_html=True)
 
     _, center, _ = st.columns([1, 1.1, 1])
     with center:
-        # Brand logo
         st.markdown("""
         <div style="text-align:center;margin-bottom:2.5rem;">
             <div style="font-size:3.5rem;margin-bottom:0.75rem;filter:drop-shadow(0 0 20px rgba(124,58,237,0.6));">
@@ -124,6 +145,7 @@ def require_password() -> bool:
         if submitted:
             if hmac.compare_digest(password, APP_PASSWORD):
                 st.session_state["_auth_ok"] = True
+                st.query_params["s"] = expected  # zapamiętaj w URL
                 st.rerun()
             else:
                 st.error("Nieprawidłowe hasło. Spróbuj ponownie.")
