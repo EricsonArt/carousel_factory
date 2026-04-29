@@ -169,7 +169,7 @@ def _call_provider(cfg: dict, prompt: str, refs: Optional[list], size: tuple) ->
 def _call_openai(model_id: str, prompt: str, refs: Optional[list], size: tuple) -> bytes:
     """
     OpenAI Images API.
-    - size: zostawiamy "1024x1536" (portret 4:5 zblizony) - OpenAI ma stale rozmiary.
+    - size: "1024x1024" (square) — taniej niz portrait, skalujemy Pillow do SLIDE_HEIGHT
     - jesli sa reference images, uzywamy /images/edits zamiast /images/generations.
     """
     try:
@@ -178,7 +178,7 @@ def _call_openai(model_id: str, prompt: str, refs: Optional[list], size: tuple) 
         raise ImageGenerationError("Brak pakietu openai. pip install openai")
 
     client = OpenAI(api_key=OPENAI_API_KEY)
-    openai_size = "1024x1536"  # closest to 4:5 (1080x1350)
+    openai_size = "1024x1024"  # square — cheapest, Pillow rescales to SLIDE_HEIGHT
 
     try:
         if refs:
@@ -244,11 +244,11 @@ def _to_file_object(ref):
 
 def _call_gemini(model_id: str, prompt: str, refs: Optional[list], size: tuple) -> bytes:
     """
-    Phase 3: Gemini 2.5 Flash Image via google-genai.
-    Phase 1: stub - rzuca QuotaExhausted aby kaskada przeszla dalej (gdy zaimplementowane bedzie sluzyc primary).
+    Gemini 2.0 Flash image generation (FREE tier: 15 req/min, 1500/dzień).
+    Wymaga GEMINI_API_KEY w Streamlit Secrets.
     """
     if not GEMINI_API_KEY:
-        raise QuotaExhausted("Gemini niedostepny w Phase 1 (brak klucza/implementacji).")
+        raise QuotaExhausted("Brak GEMINI_API_KEY — dodaj do Streamlit Secrets.")
 
     try:
         from google import genai
@@ -258,27 +258,35 @@ def _call_gemini(model_id: str, prompt: str, refs: Optional[list], size: tuple) 
 
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-    contents = []
+    # Zbuduj prompt ze stylowymi wskazówkami
+    parts = []
     if refs:
-        for r in refs[:5]:
-            contents.append(_ref_to_gemini_part(r))
-    contents.append(prompt)
+        for r in refs[:3]:
+            try:
+                parts.append(_ref_to_gemini_part(r))
+            except Exception:
+                pass
+    parts.append(types.Part.from_text(text=prompt))
 
     try:
         resp = client.models.generate_content(
             model=model_id,
-            contents=contents,
+            contents=parts,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE", "TEXT"],
+            ),
         )
     except Exception as e:
         msg = str(e).lower()
-        if "rate" in msg or "quota" in msg:
+        if "rate" in msg or "quota" in msg or "429" in msg:
             raise QuotaExhausted(f"Gemini quota: {e}")
-        raise
+        raise ImageGenerationError(f"Gemini error: {e}")
 
-    for part in resp.candidates[0].content.parts:
-        if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
-            return part.inline_data.data
-    raise ImageGenerationError("Gemini nie zwrocil obrazu")
+    for candidate in resp.candidates:
+        for part in candidate.content.parts:
+            if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
+                return part.inline_data.data
+    raise ImageGenerationError("Gemini nie zwrocil obrazu — sprobuj ponownie")
 
 
 def _ref_to_gemini_part(ref):

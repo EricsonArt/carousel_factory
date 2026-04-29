@@ -84,39 +84,39 @@ CLAUDE_FAST_MODEL = "claude-haiku-4-5-20251001"  # walidacja, krotkie taski
 # Kaskada: probujemy primary -> jesli quota wyczerpana -> secondary -> fallback
 IMAGE_MODELS = [
     {
-        "name": "gpt-image-1",
+        "name": "gemini-2.0-flash",
+        "provider": "gemini",
+        "model_id": "gemini-2.0-flash-exp",
+        "supports_reference": True,
+        "best_for": "styl",
+        # Gemini 2.0 Flash image generation: free tier (15 req/min, 1500/dzień)
+        "cost_per_image": 0.00,
+        "daily_quota": 1000,
+    },
+    {
+        "name": "gpt-image-1-low",
         "provider": "openai",
         "model_id": "gpt-image-1",
-        "supports_reference": True,        # /images/edits przyjmuje refs
-        "best_for": "tekst",                # czytelny tekst polski
-        # PRAWDZIWY koszt OpenAI 2026: $0.19/obraz przy 1024x1536 quality=high
-        # (przy quality=medium ~$0.08, low ~$0.04)
-        "cost_per_image": 0.19,
+        "supports_reference": True,
+        "best_for": "tekst",
+        # gpt-image-1 low quality 1024x1024: $0.011/obraz
+        "cost_per_image": 0.011,
         "daily_quota": 200,
     },
     {
-        "name": "gemini-2.5-flash-image",
-        "provider": "gemini",
-        "model_id": "gemini-2.5-flash-image",
-        "supports_reference": True,        # multi-image blending
-        "best_for": "styl",                 # idealny do replikacji stylu
-        "cost_per_image": 0.04,
-        "daily_quota": 500,
-    },
-    {
-        "name": "flux-pro",
+        "name": "flux-schnell",
         "provider": "replicate",
-        "model_id": "black-forest-labs/flux-1.1-pro",
+        "model_id": "black-forest-labs/flux-schnell",
         "supports_reference": False,
         "best_for": "fallback",
-        "cost_per_image": 0.04,
+        "cost_per_image": 0.003,
         "daily_quota": 1000,
     },
 ]
 
-# Jakosc generowania obrazow: 'low' (~$0.04) | 'medium' (~$0.08) | 'high' (~$0.19)
-# Zmien na 'medium' jesli chcesz wiecej generacji w ramach DAILY_COST_CAP_USD
-IMAGE_QUALITY = os.getenv("IMAGE_QUALITY", "high")
+# Jakosc OpenAI: 'low' (~$0.011) | 'medium' (~$0.042) | 'high' (~$0.167)
+# 'low' jest domyslne - dobra jakosc dla tla karuzeli, 7x tansze niz 'high'
+IMAGE_QUALITY = os.getenv("IMAGE_QUALITY", "low")
 
 
 # ─────────────────────────────────────────────────────────────

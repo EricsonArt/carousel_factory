@@ -133,11 +133,25 @@ def render_generate(brand_id: str):
             st.caption("ℹ️ Dodaj handle IG/TikTok w ustawieniach marki, żeby zaznaczyć platformy publikacji.")
 
         st.markdown('<div style="margin-top:0.25rem;"></div>', unsafe_allow_html=True)
+
+        from config import GEMINI_API_KEY as _GEMINI_KEY, OPENAI_API_KEY as _OAI_KEY
+        if _GEMINI_KEY:
+            _ai_label = "🖼️ Generuj tła AI przez Gemini 2.0 Flash (BEZPŁATNE, ~40s)"
+            _ai_help = "Gemini 2.0 Flash: darmowy tier — 1500 obrazków/dzień gratis."
+        elif _OAI_KEY:
+            _ai_label = "🖼️ Generuj tła AI przez OpenAI gpt-image-1 (~$0.08/karuzela, ~2 min)"
+            _ai_help = ("Domyślnie: gradient z palety stylu — gratis, gotowe w 15s.\n"
+                        "Zaznaczone: OpenAI low quality ($0.011/slajd × 7 = ~$0.08).\n"
+                        "Tip: dodaj GEMINI_API_KEY do Secrets — Gemini jest BEZPŁATNY!")
+        else:
+            _ai_label = "🖼️ Generuj tła AI (brak klucza API)"
+            _ai_help = "Dodaj GEMINI_API_KEY (darmowe) lub OPENAI_API_KEY do Streamlit Secrets."
+
         use_ai_images = st.checkbox(
-            "🖼️ Generuj tła AI przez OpenAI (~$1.50/karuzela, 3-4 min)",
+            _ai_label,
             value=False,
-            help="Odznaczone (domyślnie): kolorowe tła z palety stylu — gotowe w 20 sekund, bez dodatkowego kosztu. "
-                 "Zaznaczone: OpenAI generuje unikalne tło per slajd ($0.19/slajd, ~30s/slajd).",
+            help=_ai_help,
+            disabled=not (_GEMINI_KEY or _OAI_KEY),
         )
 
         submitted = st.form_submit_button("🎠 Generuj karuzelę", type="primary", use_container_width=True)
