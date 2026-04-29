@@ -33,6 +33,32 @@ if not require_password():
 
 inject_css()
 
+# Wymuś sidebar zawsze otwarty — czyści localStorage gdzie Streamlit zapamiętuje stan
+import streamlit.components.v1 as _components
+_components.html("""
+<script>
+(function() {
+    try {
+        var ls = window.parent.localStorage;
+        for (var k in ls) {
+            if (k.toLowerCase().indexOf('sidebar') !== -1) ls.removeItem(k);
+        }
+    } catch(e) {}
+    function tryExpand() {
+        try {
+            var btn = window.parent.document.querySelector(
+                '[data-testid="stSidebarCollapsedControl"] button, ' +
+                'button[data-testid="stSidebarCollapsedControl"]'
+            );
+            if (btn) btn.click();
+        } catch(e) {}
+    }
+    setTimeout(tryExpand, 400);
+    setTimeout(tryExpand, 900);
+})();
+</script>
+""", height=0)
+
 
 def _init_session():
     if "active_brand_id" not in st.session_state:
