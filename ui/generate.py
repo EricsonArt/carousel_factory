@@ -60,7 +60,17 @@ def render_generate(brand_id: str):
 
     st.markdown('<div style="margin-top:1rem;"></div>', unsafe_allow_html=True)
 
-    # Generation form
+    # ── Jeśli jest gotowa karuzela w sesji — pokaż ją OD RAZU (przed formularzem) ──
+    _carousel_key = f"gen_carousel_{brand_id}"
+    if _carousel_key in st.session_state:
+        _show_carousel_preview(st.session_state[_carousel_key])
+        st.markdown('<hr>', unsafe_allow_html=True)
+        if st.button("🔄 Wygeneruj nową karuzelę", key="new_carousel_btn", type="secondary"):
+            del st.session_state[_carousel_key]
+            st.rerun()
+        return  # nie pokazuj formularza gdy wynik jest widoczny
+
+    # ── Formularz generacji ────────────────────────────────────────────────────
     section_title("Parametry generacji", icon="⚙️")
 
     with st.form("generate_carousel"):
@@ -129,36 +139,40 @@ def render_generate(brand_id: str):
             st.error("Wpisz temat karuzeli przed generowaniem.")
             return
 
-        st.markdown('<div style="margin-top:0.5rem;"></div>', unsafe_allow_html=True)
-        progress_bar = st.progress(0.0, text="Inicjalizacja...")
+        with st.status("Generuję karuzelę...", expanded=True) as _status:
+            def on_progress(stage: str, pct: float):
+                _status.update(label=f"Generuję karuzelę... {int(pct * 100)}%")
+                st.write(f"▶ {stage}")
 
-        def on_progress(stage: str, pct: float):
-            progress_bar.progress(pct, text=stage)
+            try:
+                carousel = generate_carousel(
+                    brand_id=brand_id,
+                    topic=topic,
+                    style_id=style_id,
+                    slide_count=slide_count,
+                    progress_callback=on_progress,
+                )
 
-        try:
-            carousel = generate_carousel(
-                brand_id=brand_id,
-                topic=topic,
-                style_id=style_id,
-                slide_count=slide_count,
-                progress_callback=on_progress,
-            )
-            progress_bar.progress(1.0, text="Gotowe!")
-            targets = []
-            if publish_ig:
-                targets.append(f"IG {ig_handle}")
-            if publish_tt:
-                targets.append(f"TikTok {tt_handle}")
-            if targets:
-                st.success(f"Karuzela wygenerowana! Cel publikacji: {' + '.join(targets)}")
-            else:
-                st.success("Karuzela wygenerowana pomyślnie!")
-            _show_carousel_preview(carousel)
-        except ValueError as e:
-            st.error(f"Walidacja zablokowała generację: {e}")
-        except Exception as e:
-            st.error(f"Błąd generacji: {e}")
-            st.exception(e)
+                targets = []
+                if publish_ig:
+                    targets.append(f"IG {ig_handle}")
+                if publish_tt:
+                    targets.append(f"TikTok {tt_handle}")
+                label = "Karuzela gotowa! ✅"
+                if targets:
+                    label += f"  Cel: {' + '.join(targets)}"
+                _status.update(label=label, state="complete", expanded=False)
+
+                st.session_state[_carousel_key] = carousel
+                st.rerun()
+
+            except ValueError as e:
+                _status.update(label="Walidacja zablokowała generację ❌", state="error")
+                st.error(f"Walidacja: {e}")
+            except Exception as e:
+                _status.update(label="Błąd generacji ❌", state="error", expanded=True)
+                st.error(f"Błąd generacji: {e}")
+                st.exception(e)
 
 
 def _show_carousel_preview(carousel: dict):
