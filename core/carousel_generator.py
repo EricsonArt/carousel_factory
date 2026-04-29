@@ -91,42 +91,49 @@ def render_slide_image(
     slide: dict,
     style: Optional[dict],
     output_path: Path,
+    use_ai_images: bool = False,
 ) -> dict:
     """
     Generuje obraz tla + naklada tekst Pillow.
     Zwraca {"image_path": ..., "image_provider": ..., "image_model": ...}
     """
-    image_prompt = slide.get("image_prompt", "")
     headline = slide.get("headline", "")
     body = slide.get("body", "")
     image_focus = slide.get("image_focus", "center")
 
-    # Buduj style hint z stylu
-    style_hint = ""
-    refs = []
-    if style:
-        style_hint = ". ".join(filter(None, [
-            style.get("image_style", ""),
-            style.get("composition_notes", ""),
-            f"palette: {', '.join(style.get('palette', [])[:5])}" if style.get("palette") else "",
-            f"mood: {style.get('mood', '')}" if style.get("mood") else "",
-        ]))
-        refs = list(style.get("reference_image_paths") or [])
+    if use_ai_images:
+        image_prompt = slide.get("image_prompt", "")
+        style_hint = ""
+        refs = []
+        if style:
+            style_hint = ". ".join(filter(None, [
+                style.get("image_style", ""),
+                style.get("composition_notes", ""),
+                f"palette: {', '.join(style.get('palette', [])[:5])}" if style.get("palette") else "",
+                f"mood: {style.get('mood', '')}" if style.get("mood") else "",
+            ]))
+            refs = list(style.get("reference_image_paths") or [])
 
-    # Generuj tlo
-    try:
-        result = generate_image(
-            prompt=image_prompt or f"Background for social media carousel slide about: {headline}",
-            reference_images=refs[:4],   # max 4 refs zeby zaoszczedzic
-            size=(SLIDE_WIDTH, SLIDE_HEIGHT),
-            style_hint=style_hint,
-        )
-    except (QuotaExhausted, ImageGenerationError) as e:
-        # Phase 1 fallback: solidne tło z palety (gdy brak generatora)
+        try:
+            result = generate_image(
+                prompt=image_prompt or f"Background for social media carousel slide about: {headline}",
+                reference_images=refs[:4],
+                size=(SLIDE_WIDTH, SLIDE_HEIGHT),
+                style_hint=style_hint,
+            )
+        except (QuotaExhausted, ImageGenerationError):
+            result = {
+                "image_bytes": _solid_background_with_palette(style),
+                "provider": "fallback",
+                "model": "solid_color",
+                "cost_usd": 0.0,
+            }
+    else:
+        # Domyślnie: gradient/solid z palety stylu — szybko, bez kosztów
         result = {
-            "image_bytes": _solid_background_with_palette(style),
-            "provider": "fallback",
-            "model": "solid_color",
+            "image_bytes": _gradient_background_with_palette(style),
+            "provider": "local",
+            "model": "gradient",
             "cost_usd": 0.0,
         }
 
@@ -271,6 +278,27 @@ def _solid_background_with_palette(style: Optional[dict]) -> bytes:
     return buf.getvalue()
 
 
+def _gradient_background_with_palette(style: Optional[dict]) -> bytes:
+    """Gradient z 2 kolorów palety — szybkie tło bez AI."""
+    palette = (style or {}).get("palette") or ["#1a1a2e", "#4c1d95"]
+    c1 = hex_to_rgb(palette[0] if palette else "#1a1a2e")
+    c2 = hex_to_rgb(palette[1] if len(palette) > 1 else "#4c1d95")
+
+    img = Image.new("RGB", (SLIDE_WIDTH, SLIDE_HEIGHT))
+    pixels = img.load()
+    for y in range(SLIDE_HEIGHT):
+        t = y / SLIDE_HEIGHT
+        r = int(c1[0] * (1 - t) + c2[0] * t)
+        g = int(c1[1] * (1 - t) + c2[1] * t)
+        b = int(c1[2] * (1 - t) + c2[2] * t)
+        for x in range(SLIDE_WIDTH):
+            pixels[x, y] = (r, g, b)
+
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
 # ─────────────────────────────────────────────────────────────
 # GLOWNY ENTRY: GENERATE FULL CAROUSEL
 # ─────────────────────────────────────────────────────────────
@@ -281,6 +309,7 @@ def generate_carousel(
     style_id: Optional[str] = None,
     topic_id: Optional[str] = None,
     slide_count: int = DEFAULT_SLIDES,
+    use_ai_images: bool = False,
     progress_callback=None,
 ) -> dict:
     """
@@ -333,7 +362,7 @@ def generate_carousel(
         slide_filename = f"{i+1:02d}_{sanitize_filename(slide.get('headline', 'slide'))}.jpg"
         slide_path = carousel_dir / slide_filename
         try:
-            img_meta = render_slide_image(slide, style, slide_path)
+            img_meta = render_slide_image(slide, style, slide_path, use_ai_images=use_ai_images)
         except Exception as e:
             img_meta = {
                 "image_path": "",

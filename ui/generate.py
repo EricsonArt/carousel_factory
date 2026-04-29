@@ -132,6 +132,14 @@ def render_generate(brand_id: str):
         if not ig_handle and not tt_handle:
             st.caption("ℹ️ Dodaj handle IG/TikTok w ustawieniach marki, żeby zaznaczyć platformy publikacji.")
 
+        st.markdown('<div style="margin-top:0.25rem;"></div>', unsafe_allow_html=True)
+        use_ai_images = st.checkbox(
+            "🖼️ Generuj tła AI przez OpenAI (~$1.50/karuzela, 3-4 min)",
+            value=False,
+            help="Odznaczone (domyślnie): kolorowe tła z palety stylu — gotowe w 20 sekund, bez dodatkowego kosztu. "
+                 "Zaznaczone: OpenAI generuje unikalne tło per slajd ($0.19/slajd, ~30s/slajd).",
+        )
+
         submitted = st.form_submit_button("🎠 Generuj karuzelę", type="primary", use_container_width=True)
 
     if submitted:
@@ -150,6 +158,7 @@ def render_generate(brand_id: str):
                     topic=topic,
                     style_id=style_id,
                     slide_count=slide_count,
+                    use_ai_images=use_ai_images,
                     progress_callback=on_progress,
                 )
 
