@@ -106,6 +106,7 @@ class PublerClient:
             }
         if tt_account_ids:
             # TikTok photo carousel: max 35 zdjęć. TITLE WYMAGANY.
+            # auto_add_music=True → TikTok automatycznie dodaje trending dźwięk do photo carousel
             networks["tiktok"] = {
                 "type": "photo",
                 "title": tt_title,
@@ -117,6 +118,7 @@ class PublerClient:
                     "promotional": False,
                     "paid": False,
                     "reminder": False,
+                    "auto_add_music": True,
                 },
             }
 

@@ -148,4 +148,4 @@ def render_history(brand_id: str):
             # Publer auto-publish section — same widget as in Generator
             st.markdown('<div style="margin-top:1rem;"></div>', unsafe_allow_html=True)
             full_carousel = get_carousel(c["id"]) or c
-            show_publer_section(full_carousel)
+            show_publer_section(full_carousel, key_suffix="hist")

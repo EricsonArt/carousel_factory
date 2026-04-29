@@ -607,8 +607,12 @@ def _show_carousel_preview(carousel: dict):
     show_publer_section(carousel)
 
 
-def show_publer_section(carousel: dict):
-    """Sekcja zaplanowanego wysyłania karuzeli do Publer."""
+def show_publer_section(carousel: dict, key_suffix: str = "gen"):
+    """Sekcja zaplanowanego wysyłania karuzeli do Publer.
+
+    key_suffix: rozróżnia widgety gdy ta sama karuzela renderuje się w wielu miejscach
+                (Generator vs Historia) — Streamlit wymaga unikalnych kluczy.
+    """
     with st.expander("📤 Wyślij do Publer (auto-publikacja)", expanded=bool(PUBLER_API_KEY)):
 
         if not PUBLER_API_KEY:
@@ -626,12 +630,13 @@ def show_publer_section(carousel: dict):
         from core.publisher_publer import PublerClient, PublerError
 
         car_id = carousel["id"]
+        kpref = f"{key_suffix}_{car_id}"
         accounts_key = "publer_accounts"
 
         # ── Załaduj konta + Test ──────────────────────────────────────────
         col_load, col_test, _ = st.columns([1, 1, 2])
         with col_load:
-            if st.button("🔄 Załaduj konta", key=f"load_acc_{car_id}"):
+            if st.button("🔄 Załaduj konta", key=f"load_acc_{kpref}"):
                 try:
                     client = PublerClient(PUBLER_API_KEY, PUBLER_WORKSPACE_ID)
                     if not PUBLER_WORKSPACE_ID:
@@ -647,7 +652,7 @@ def show_publer_section(carousel: dict):
                     st.error(f"Nieoczekiwany błąd: {e}")
                     st.exception(e)
         with col_test:
-            if st.button("🩺 Test API", key=f"test_pub_{car_id}",
+            if st.button("🩺 Test API", key=f"test_pub_{kpref}",
                           help="Sprawdza klucz, workspace i listę kont — diagnostyka."):
                 _run_publer_diagnostic()
 
@@ -675,7 +680,7 @@ def show_publer_section(carousel: dict):
                     format_func=lambda aid: _account_label(
                         next((a for a in ig_accounts if a["id"] == aid), {})
                     ),
-                    key=f"pub_ig_sel_{car_id}",
+                    key=f"pub_ig_sel_{kpref}",
                 )
                 selected_ig = chosen
             else:
@@ -689,7 +694,7 @@ def show_publer_section(carousel: dict):
                     format_func=lambda aid: _account_label(
                         next((a for a in tt_accounts if a["id"] == aid), {})
                     ),
-                    key=f"pub_tt_sel_{car_id}",
+                    key=f"pub_tt_sel_{kpref}",
                 )
                 selected_tt = chosen
             else:
@@ -705,14 +710,14 @@ def show_publer_section(carousel: dict):
                 "Data publikacji",
                 value=default_dt.date(),
                 min_value=now_local.date(),
-                key=f"pub_date_{car_id}",
+                key=f"pub_date_{kpref}",
             )
         with col_t:
             sched_time = st.time_input(
                 "Godzina",
                 value=default_dt.replace(second=0, microsecond=0).time(),
                 step=300,
-                key=f"pub_time_{car_id}",
+                key=f"pub_time_{kpref}",
             )
 
         scheduled_dt = datetime.combine(sched_date, sched_time)
@@ -734,7 +739,7 @@ def show_publer_section(carousel: dict):
         else:
             if st.button(
                 "🚀 Wyślij do Publer",
-                key=f"send_publer_{car_id}",
+                key=f"send_publer_{kpref}",
                 type="primary",
                 disabled=not (selected_ig or selected_tt),
             ):
