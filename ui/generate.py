@@ -753,7 +753,7 @@ def show_publer_section(carousel: dict):
                 st.success(f"✅ API zwróciło OK — post id `{pid}`, job state: `{final_state_str}`")
                 st.caption(
                     "ℹ️ Otwórz publer.com → Calendar / Drafts żeby zobaczyć czy post tam jest. "
-                    "Jeśli go nie ma mimo „OK", sprawdź szczegóły poniżej."
+                    "Jeśli go nie ma mimo 'OK', sprawdź szczegóły poniżej."
                 )
 
                 with st.expander("📤 Wysłany payload"):
