@@ -42,9 +42,11 @@ def generate_copy(
     brief: dict,
     style: Optional[dict] = None,
     slide_count: int = DEFAULT_SLIDES,
+    language: str = "pl",
 ) -> dict:
     """
     Generuje cala karuzele tekstowa (slides + caption + hashtags).
+    language: 'pl' | 'en' — w jakim języku ma być treść slajdów.
     """
     slide_count = max(MIN_SLIDES, min(MAX_SLIDES, slide_count))
     system_prompt = _load_copy_prompt()
@@ -60,12 +62,24 @@ STYL VISUAL (do inspiracji hookow i tonu):
 - Image style (do image_prompt kazdego slajdu): {style.get('image_style', '')}
 """
 
+    if language == "en":
+        language_directive = (
+            "- LANGUAGE: ENGLISH. All slide text (headlines, body, caption, hashtags labels) "
+            "must be in fluent, native English. Do NOT use any Polish words or characters. "
+            "Hashtags should be English/global (e.g. #tips, #howto, #productivity)."
+        )
+    else:
+        language_directive = (
+            "- LANGUAGE: POLSKI. Z poprawnymi znakami diakrytycznymi (ą ę ó ł ś ć ż ź ń). "
+            "Hashtagi mieszane PL i EN."
+        )
+
     prompt = f"""Stworz MAKSYMALNIE WIRALOWA karuzele Instagram/TikTok na temat:
 "{topic}"
 
 PARAMETRY:
 - Liczba slajdow: {slide_count} (dokladnie tyle)
-- Jezyk: polski (z poprawnymi znakami diakrytycznymi)
+{language_directive}
 
 BRIEF MARKI:
 {json.dumps(brief, ensure_ascii=False, indent=2)}
@@ -319,6 +333,7 @@ def generate_carousel(
     prefer_provider: Optional[str] = None,
     image_quality: str = "low",
     model_override: Optional[str] = None,
+    language: str = "pl",
     progress_callback=None,
 ) -> dict:
     """
@@ -339,7 +354,7 @@ def generate_carousel(
     if progress_callback:
         progress_callback("Generuje tekst karuzeli...", 0.1)
 
-    copy_data = generate_copy(topic, brief, style, slide_count)
+    copy_data = generate_copy(topic, brief, style, slide_count, language=language)
 
     if progress_callback:
         progress_callback("Walidacja zgodnosci z briefem...", 0.25)

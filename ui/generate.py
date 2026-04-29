@@ -1,15 +1,139 @@
 """
-Generator karuzel — generowanie + wysyłanie do Publer.
+Generator karuzel — generowanie (równoległe) + wysyłanie do Publer.
 """
+import threading
+import time
+import traceback
+import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from core.carousel_generator import generate_carousel, export_carousel_as_zip
 from db import get_brand, get_brief, list_styles, update_carousel
 from config import DEFAULT_SLIDES, MIN_SLIDES, MAX_SLIDES, PUBLER_API_KEY, PUBLER_WORKSPACE_ID
 from ui.theme import page_header, section_title, empty_state
+
+
+# ─────────────────────────────────────────────────────────────
+# JOB MANAGER — równoległe generowanie kilku karuzel naraz
+# ─────────────────────────────────────────────────────────────
+
+def _get_jobs() -> dict:
+    """Słownik wszystkich jobów (running + done + error) per sesja."""
+    return st.session_state.setdefault("active_jobs", {})
+
+
+def _start_generation_job(brand_id: str, params: dict) -> str:
+    """Odpala nowy wątek generacji. Zwraca job_id."""
+    jobs = _get_jobs()
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {
+        "id": job_id,
+        "brand_id": brand_id,
+        "topic": params["topic"],
+        "language": params.get("language", "pl"),
+        "status": "running",
+        "stage": "Inicjalizacja...",
+        "progress": 0.0,
+        "started_at": time.time(),
+        "finished_at": None,
+        "carousel": None,
+        "error": None,
+        "traceback": None,
+    }
+
+    thread = threading.Thread(
+        target=_run_generation_job,
+        args=(jobs, job_id, brand_id, params),
+        daemon=True,
+    )
+    add_script_run_ctx(thread)
+    thread.start()
+    return job_id
+
+
+def _run_generation_job(jobs: dict, job_id: str, brand_id: str, params: dict):
+    """Funkcja wątku — wywołuje generate_carousel i zapisuje wynik do jobs[job_id]."""
+    def cb(stage: str, pct: float):
+        if job_id in jobs:
+            jobs[job_id]["stage"] = stage
+            jobs[job_id]["progress"] = float(pct)
+
+    try:
+        carousel = generate_carousel(
+            brand_id=brand_id,
+            topic=params["topic"],
+            style_id=params.get("style_id"),
+            slide_count=params["slide_count"],
+            use_ai_images=params.get("use_ai_images", False),
+            prefer_provider=params.get("prefer_provider"),
+            image_quality=params.get("image_quality", "low"),
+            model_override=params.get("model_override"),
+            language=params.get("language", "pl"),
+            progress_callback=cb,
+        )
+        jobs[job_id]["carousel"] = carousel
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["stage"] = "Gotowe"
+        jobs[job_id]["progress"] = 1.0
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["traceback"] = traceback.format_exc()
+    finally:
+        jobs[job_id]["finished_at"] = time.time()
+
+
+@st.fragment(run_every=2)
+def _render_jobs_panel(brand_id: str):
+    """Panel aktywnych i ukończonych jobów. Auto-refresh co 2s."""
+    jobs = _get_jobs()
+    # Filtruj tylko joby tej marki
+    brand_jobs = {k: v for k, v in jobs.items() if v.get("brand_id") == brand_id}
+    if not brand_jobs:
+        return
+
+    running = [v for v in brand_jobs.values() if v["status"] == "running"]
+    done    = [v for v in brand_jobs.values() if v["status"] == "done"]
+    errors  = [v for v in brand_jobs.values() if v["status"] == "error"]
+
+    if running:
+        section_title(f"🔄 W trakcie generacji ({len(running)})", icon="")
+        for j in running:
+            with st.container(border=True):
+                col_t, col_lang = st.columns([5, 1])
+                with col_t:
+                    st.markdown(f"**{j['topic'][:80]}**")
+                with col_lang:
+                    st.caption(f"🌐 {j['language'].upper()}")
+                pct = max(0.02, min(1.0, j["progress"]))
+                st.progress(pct, text=f"{int(pct*100)}% — {j['stage']}")
+                elapsed = int(time.time() - j["started_at"])
+                st.caption(f"⏱️ {elapsed}s")
+
+    if done:
+        section_title(f"✅ Gotowe ({len(done)})", icon="")
+        for j in sorted(done, key=lambda x: x["finished_at"] or 0, reverse=True):
+            with st.expander(f"✅ {j['topic'][:80]}  ·  🌐 {j['language'].upper()}", expanded=False):
+                _show_carousel_preview(j["carousel"])
+                if st.button("🗑️ Usuń z listy", key=f"rm_done_{j['id']}"):
+                    del jobs[j["id"]]
+                    st.rerun()
+
+    if errors:
+        section_title(f"❌ Błędy ({len(errors)})", icon="")
+        for j in errors:
+            with st.expander(f"❌ {j['topic'][:80]}", expanded=False):
+                st.error(j["error"])
+                if j.get("traceback"):
+                    with st.expander("Szczegóły"):
+                        st.code(j["traceback"])
+                if st.button("🗑️ Usuń", key=f"rm_err_{j['id']}"):
+                    del jobs[j["id"]]
+                    st.rerun()
 
 
 def render_generate(brand_id: str):
@@ -60,15 +184,8 @@ def render_generate(brand_id: str):
 
     st.markdown('<div style="margin-top:1rem;"></div>', unsafe_allow_html=True)
 
-    # ── Jeśli jest gotowa karuzela w sesji — pokaż ją OD RAZU (przed formularzem) ──
-    _carousel_key = f"gen_carousel_{brand_id}"
-    if _carousel_key in st.session_state:
-        _show_carousel_preview(st.session_state[_carousel_key])
-        st.markdown('<hr>', unsafe_allow_html=True)
-        if st.button("🔄 Wygeneruj nową karuzelę", key="new_carousel_btn", type="secondary"):
-            del st.session_state[_carousel_key]
-            st.rerun()
-        return  # nie pokazuj formularza gdy wynik jest widoczny
+    # ── Panel aktywnych i ukończonych jobów (auto-refresh co 2s) ──────────────
+    _render_jobs_panel(brand_id)
 
     # ── Formularz generacji ────────────────────────────────────────────────────
     section_title("Parametry generacji", icon="⚙️")
@@ -85,12 +202,20 @@ def render_generate(brand_id: str):
             help="Im bardziej konkretny i wiralowy temat, tym lepsza karuzela."
         )
 
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns([2, 2, 1])
         with col1:
             slide_count = st.slider(
                 "Liczba slajdów",
                 MIN_SLIDES, MAX_SLIDES, DEFAULT_SLIDES,
                 help="7-9 slajdów to optimum dla IG/TikTok karuzel."
+            )
+        with col3:
+            language = st.selectbox(
+                "🌐 Język",
+                options=["pl", "en"],
+                format_func=lambda x: {"pl": "🇵🇱 Polski", "en": "🇬🇧 English"}[x],
+                index=0,
+                help="W jakim języku ma być treść slajdów. Tekst nakładamy Pillow — diakrytyki PL gwarantowane.",
             )
         with col2:
             if styles:
@@ -193,44 +318,22 @@ def render_generate(brand_id: str):
             st.error("Wpisz temat karuzeli przed generowaniem.")
             return
 
-        with st.status("Generuję karuzelę...", expanded=True) as _status:
-            def on_progress(stage: str, pct: float):
-                _status.update(label=f"Generuję karuzelę... {int(pct * 100)}%")
-                st.write(f"▶ {stage}")
-
-            try:
-                carousel = generate_carousel(
-                    brand_id=brand_id,
-                    topic=topic,
-                    style_id=style_id,
-                    slide_count=slide_count,
-                    use_ai_images=use_ai_images,
-                    prefer_provider=prefer_provider,
-                    image_quality=image_quality,
-                    model_override=model_override,
-                    progress_callback=on_progress,
-                )
-
-                targets = []
-                if publish_ig:
-                    targets.append(f"IG {ig_handle}")
-                if publish_tt:
-                    targets.append(f"TikTok {tt_handle}")
-                label = "Karuzela gotowa! ✅"
-                if targets:
-                    label += f"  Cel: {' + '.join(targets)}"
-                _status.update(label=label, state="complete", expanded=False)
-
-                st.session_state[_carousel_key] = carousel
-                st.rerun()
-
-            except ValueError as e:
-                _status.update(label="Walidacja zablokowała generację ❌", state="error")
-                st.error(f"Walidacja: {e}")
-            except Exception as e:
-                _status.update(label="Błąd generacji ❌", state="error", expanded=True)
-                st.error(f"Błąd generacji: {e}")
-                st.exception(e)
+        job_id = _start_generation_job(brand_id, {
+            "topic": topic,
+            "style_id": style_id,
+            "slide_count": slide_count,
+            "use_ai_images": use_ai_images,
+            "prefer_provider": prefer_provider,
+            "image_quality": image_quality,
+            "model_override": model_override,
+            "language": language,
+        })
+        st.success(
+            f"✅ Karuzela ruszyła w tle (job `{job_id}`). "
+            f"Możesz wpisać kolejny temat i odpalić następną — będą generować się równolegle. "
+            f"Postęp widoczny w panelu na górze strony."
+        )
+        st.rerun()
 
 
 def _show_carousel_preview(carousel: dict):
