@@ -64,34 +64,41 @@ def short_hash(text: str, length: int = 8) -> str:
 def slot_randomizer(slots: list[tuple[str, str]], num_posts: int,
                      min_gap_minutes: int = 90,
                      base_date: datetime = None,
-                     seed: int = None) -> list[datetime]:
+                     seed: int = None,
+                     min_lead_minutes: int = 10) -> list[datetime]:
     """
     Generuje `num_posts` losowych UTC datetimes ulokowanych w `slots`.
 
-    Sloty to lista (start_time, end_time) jako stringi 'HH:MM' w lokalnym czasie.
-    Min `min_gap_minutes` przerwa miedzy postami.
+    Sloty to lista (start_time, end_time) jako stringi 'HH:MM' UTC.
+    - min_gap_minutes: minimalna przerwa miedzy postami
+    - min_lead_minutes: minimalny zapas od `now()` (Publer potrzebuje czasu na przetworzenie)
 
     Algorytm:
-      1) Dla kazdego slotu wybierz losowy moment.
-      2) Sortuj rosnaco.
-      3) Jesli ktorys post ma <min_gap od poprzedniego, przesun go na max(slot.start, prev+gap).
-      4) Jesli num_posts > liczba slotow, dodaj kolejne dni.
+      1) Pomijamy sloty ktore juz sie skonczyly dzis (slot_end < now+lead).
+      2) Dla pozostalych slotow losujemy moment, clampujac dolnie do `now+lead`.
+      3) Jesli num_posts > liczba slotow, dodajemy kolejne dni.
+      4) Wymuszamy min_gap_minutes miedzy kolejnymi postami.
     """
     if seed is not None:
         rnd = random.Random(seed)
     else:
         rnd = random.Random()
 
+    now_utc = datetime.now(timezone.utc)
+    earliest_allowed = now_utc + timedelta(minutes=min_lead_minutes)
+
     if base_date is None:
-        base_date = datetime.now(timezone.utc)
+        base_date = now_utc
 
     base_date = base_date.replace(hour=0, minute=0, second=0, microsecond=0)
     results: list[datetime] = []
 
     day_offset = 0
     posts_left = num_posts
+    safety_loops = 0
 
-    while posts_left > 0:
+    while posts_left > 0 and safety_loops < 60:
+        safety_loops += 1
         day_slots = []
         for start_str, end_str in slots:
             if posts_left <= 0:
@@ -102,16 +109,22 @@ def slot_randomizer(slots: list[tuple[str, str]], num_posts: int,
             slot_start = base_date + timedelta(days=day_offset, hours=start_h, minutes=start_m)
             slot_end = base_date + timedelta(days=day_offset, hours=end_h, minutes=end_m)
 
-            window_seconds = int((slot_end - slot_start).total_seconds())
+            # Pomin slot ktory juz minal (zostaly < lead minut)
+            if slot_end <= earliest_allowed:
+                continue
+
+            # Clampuj dolnie do earliest_allowed (zeby nie wybrac przeszlosci)
+            effective_start = max(slot_start, earliest_allowed)
+            window_seconds = int((slot_end - effective_start).total_seconds())
             if window_seconds <= 0:
                 continue
+
             offset_seconds = rnd.randint(0, window_seconds)
-            chosen = slot_start + timedelta(seconds=offset_seconds)
+            chosen = effective_start + timedelta(seconds=offset_seconds)
             day_slots.append(chosen)
             posts_left -= 1
 
         day_slots.sort()
-        # enforce min gap
         for i in range(1, len(day_slots)):
             min_next = day_slots[i - 1] + timedelta(minutes=min_gap_minutes)
             if day_slots[i] < min_next:

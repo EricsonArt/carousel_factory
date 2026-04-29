@@ -157,6 +157,8 @@ def _run_publer_job(jobs: dict, job_id: str, carousel: dict,
         jobs[job_id]["stage"] = "Tworzę zaplanowany post..."
         jobs[job_id]["progress"] = 0.85
 
+        # schedule_carousel ma teraz wbudowana weryfikacje — rzuca PublerError
+        # gdy Publer odrzuci post lub ukonczy job z bledami w srodku
         schedule_result = client.schedule_carousel(
             ig_account_ids=ig_ids,
             tt_account_ids=tt_ids,
@@ -164,26 +166,8 @@ def _run_publer_job(jobs: dict, job_id: str, carousel: dict,
             hashtags=carousel.get("hashtags") or [],
             media_ids=media_ids,
             scheduled_at=scheduled_iso,
+            verify=True,
         )
-
-        # Jeśli Publer zwrócił job_id — odpytaj status żeby się upewnić, że post powstał
-        final_job_status = None
-        publer_job_id = schedule_result.get("job_id")
-        if publer_job_id:
-            jobs[job_id]["stage"] = "Sprawdzam status job-a w Publer..."
-            jobs[job_id]["progress"] = 0.92
-            for _ in range(8):  # ~16s max
-                try:
-                    js = client.get_job_status(publer_job_id)
-                    final_job_status = js
-                    state = (js.get("status") or js.get("state") or "").lower()
-                    if state in ("completed", "complete", "done", "scheduled", "success"):
-                        break
-                    if state in ("failed", "error"):
-                        raise RuntimeError(f"Publer job zakończył się błędem: {js}")
-                except PublerError:
-                    pass
-                time.sleep(2)
 
         publer_post_id = (
             schedule_result.get("post_id")
@@ -194,11 +178,11 @@ def _run_publer_job(jobs: dict, job_id: str, carousel: dict,
 
         jobs[job_id]["status"] = "done"
         jobs[job_id]["progress"] = 1.0
-        jobs[job_id]["stage"] = "Gotowe"
+        jobs[job_id]["stage"] = "Gotowe — Publer potwierdził utworzenie posta"
         jobs[job_id]["result"] = {
             "post_id": str(publer_post_id),
             "schedule_result": schedule_result,
-            "final_job_status": final_job_status,
+            "final_job_status": schedule_result.get("job_status_final"),
         }
 
     except Exception as e:
@@ -906,6 +890,14 @@ def show_publer_section(carousel: dict, key_suffix: str = "gen"):
         scheduled_iso = scheduled_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         st.caption(f"Zaplanowano na: **{scheduled_dt.strftime('%d.%m.%Y o %H:%M')}** (czas lokalny)")
+
+        # Lead time check — Publer w praktyce potrzebuje 5+ min zeby przetworzyc
+        lead_minutes = (scheduled_dt - datetime.now()).total_seconds() / 60
+        if lead_minutes < 5:
+            st.warning(
+                f"⚠️ Zaplanowano za **{int(lead_minutes)} min** — Publer może to odrzucić. "
+                "Daj minimum **5–10 minut** zapasu, żeby kolejka API zdążyła przetworzyć post."
+            )
 
         # ── Wyślij ────────────────────────────────────────────────────────
         st.markdown('<div style="margin-top:0.75rem;"></div>', unsafe_allow_html=True)

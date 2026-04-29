@@ -180,7 +180,7 @@ def run_automation_batch(
                     mid = client.upload_media(path)
                     media_ids.append(mid)
 
-                job_dict["stage"] = f"[{i+1}/{total}] Planuję w Publer..."
+                job_dict["stage"] = f"[{i+1}/{total}] Planuję + weryfikuję w Publer..."
                 publer_result = client.schedule_carousel(
                     ig_account_ids=ig_account_ids,
                     tt_account_ids=tt_account_ids,
@@ -188,14 +188,26 @@ def run_automation_batch(
                     hashtags=carousel.get("hashtags") or [],
                     media_ids=media_ids,
                     scheduled_at=scheduled_iso,
+                    verify=True,  # Czeka az Publer potwierdzi utworzenie posta
                 )
 
-                update_carousel(carousel["id"], status="scheduled", scheduled_at=scheduled_iso)
+                publer_post_id = (
+                    publer_result.get("post_id")
+                    or publer_result.get("job_id")
+                    or "ok"
+                )
+                update_carousel(
+                    carousel["id"],
+                    status="scheduled",
+                    scheduled_at=scheduled_iso,
+                    publer_post_id=str(publer_post_id),
+                )
                 results.append({
                     "topic": topic,
                     "carousel_id": carousel["id"],
                     "scheduled_at": scheduled_iso,
                     "status": "scheduled",
+                    "publer_post_id": str(publer_post_id),
                 })
 
             except Exception as e:
@@ -205,7 +217,7 @@ def run_automation_batch(
                     "carousel_id": carousel.get("id", ""),
                     "scheduled_at": scheduled_iso,
                     "status": "error_publer",
-                    "error": str(e)[:140],
+                    "error": str(e)[:200],
                 })
 
         # 5. Zapisz znacznik czasu ostatniego uruchomienia

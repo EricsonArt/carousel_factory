@@ -2,6 +2,7 @@
 Klient Publer API — wysyła karuzele do zaplanowanego publikowania na IG i TikTok.
 Docs: https://publer.com/docs/api-reference/introduction
 """
+import time
 import requests
 from pathlib import Path
 from typing import Optional
@@ -72,14 +73,14 @@ class PublerClient:
         hashtags: list[str],
         media_ids: list[str],
         scheduled_at: str,
+        verify: bool = True,
     ) -> dict:
         """
         Planuje karuzelę na Instagramie i/lub TikToku.
-        Returns dict z polami:
-          - request_payload: co poszło do API
-          - status_code: HTTP status
-          - response: surowy JSON z Publer
-          - job_id / post_id (jeśli Publer zwraca)
+
+        verify=True → po wyslaniu polluje get_job_status az Publer potwierdzi
+                      ze post zostal utworzony. Rzuca PublerError gdy job
+                      'completed' ale z bledami w srodku albo gdy 'failed'.
         """
         if not ig_account_ids and not tt_account_ids:
             raise PublerError("Nie wybrano żadnego konta do publikacji.")
@@ -106,7 +107,8 @@ class PublerClient:
             }
         if tt_account_ids:
             # TikTok photo carousel: max 35 zdjęć. TITLE WYMAGANY.
-            # auto_add_music=True → TikTok automatycznie dodaje trending dźwięk do photo carousel
+            # UWAGA: nie dodajemy nieudokumentowanych pol (jak auto_add_music),
+            # bo Publer cicho odrzuca caly post zamiast je ignorowac.
             networks["tiktok"] = {
                 "type": "photo",
                 "title": tt_title,
@@ -118,7 +120,6 @@ class PublerClient:
                     "promotional": False,
                     "paid": False,
                     "reminder": False,
-                    "auto_add_music": True,
                 },
             }
 
@@ -146,18 +147,53 @@ class PublerClient:
                 f"Wysłany payload: {payload}"
             )
 
+        job_id = (
+            response_json.get("job_id")
+            or (response_json.get("data") or {}).get("job_id")
+        )
+
+        # ── Weryfikacja: czekamy az Publer faktycznie utworzy posty ──────────
+        job_status_final: Optional[dict] = None
+        if verify and job_id:
+            for _ in range(10):  # ~20s max
+                try:
+                    js = self.get_job_status(job_id)
+                    job_status_final = js
+                    state = (js.get("status") or js.get("state") or "").lower()
+
+                    # Bledy bezposrednie
+                    if state in ("failed", "error", "rejected"):
+                        errs = self._extract_errors(js)
+                        raise PublerError(
+                            f"Publer odrzucił post (state={state}): "
+                            f"{errs or js}\nWysłany payload: {payload}"
+                        )
+
+                    # Job ukonczony — sprawdz czy nie ma ukrytych bledow w srodku
+                    if state in ("completed", "complete", "done", "success", "scheduled"):
+                        errs = self._extract_errors(js)
+                        if errs:
+                            raise PublerError(
+                                f"Publer ukończył job ale post nie powstał: "
+                                f"{errs}\nWysłany payload: {payload}"
+                            )
+                        break
+                except PublerError:
+                    raise
+                except Exception:
+                    pass
+                time.sleep(2)
+
         return {
             "request_payload": payload,
             "status_code": resp.status_code,
             "response": response_json,
-            "job_id": (
-                response_json.get("job_id")
-                or (response_json.get("data") or {}).get("job_id")
-            ),
+            "job_id": job_id,
             "post_id": (
                 response_json.get("id")
                 or (response_json.get("data") or {}).get("id")
             ),
+            "job_status_final": job_status_final,
         }
 
     def get_job_status(self, job_id: str) -> dict:
@@ -189,3 +225,32 @@ class PublerClient:
         except Exception:
             detail = resp.text[:400]
         raise PublerError(f"Publer API {resp.status_code}: {detail}")
+
+    @staticmethod
+    def _extract_errors(job_status: dict) -> list:
+        """Wyciaga bledy z job_status response — sprawdza wszystkie znane lokalizacje."""
+        if not isinstance(job_status, dict):
+            return []
+        candidates = []
+        for key in ("errors", "failures", "error", "failure", "issues"):
+            v = job_status.get(key)
+            if v:
+                candidates.append(v)
+        data = job_status.get("data")
+        if isinstance(data, dict):
+            for key in ("errors", "failures"):
+                v = data.get(key)
+                if v:
+                    candidates.append(v)
+            posts = data.get("posts") or []
+            if isinstance(posts, list):
+                for p in posts:
+                    if isinstance(p, dict):
+                        st = (p.get("status") or p.get("state") or "").lower()
+                        if st in ("failed", "error", "rejected"):
+                            candidates.append(p)
+                        for key in ("errors", "failures", "error"):
+                            v = p.get(key)
+                            if v:
+                                candidates.append(v)
+        return candidates
