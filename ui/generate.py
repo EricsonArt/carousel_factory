@@ -157,7 +157,7 @@ def _run_publer_job(jobs: dict, job_id: str, carousel: dict,
         jobs[job_id]["stage"] = "Tworzę zaplanowany post..."
         jobs[job_id]["progress"] = 0.85
 
-        result = client.schedule_carousel(
+        schedule_result = client.schedule_carousel(
             ig_account_ids=ig_ids,
             tt_account_ids=tt_ids,
             caption=carousel.get("caption", ""),
@@ -166,18 +166,40 @@ def _run_publer_job(jobs: dict, job_id: str, carousel: dict,
             scheduled_at=scheduled_iso,
         )
 
-        publer_post_id = str(
-            result.get("id")
-            or (result.get("data") or {}).get("id")
-            or result.get("job_id")
+        # Jeśli Publer zwrócił job_id — odpytaj status żeby się upewnić, że post powstał
+        final_job_status = None
+        publer_job_id = schedule_result.get("job_id")
+        if publer_job_id:
+            jobs[job_id]["stage"] = "Sprawdzam status job-a w Publer..."
+            jobs[job_id]["progress"] = 0.92
+            for _ in range(8):  # ~16s max
+                try:
+                    js = client.get_job_status(publer_job_id)
+                    final_job_status = js
+                    state = (js.get("status") or js.get("state") or "").lower()
+                    if state in ("completed", "complete", "done", "scheduled", "success"):
+                        break
+                    if state in ("failed", "error"):
+                        raise RuntimeError(f"Publer job zakończył się błędem: {js}")
+                except PublerError:
+                    pass
+                time.sleep(2)
+
+        publer_post_id = (
+            schedule_result.get("post_id")
+            or schedule_result.get("job_id")
             or "ok"
         )
-        update_carousel(carousel["id"], publer_post_id=publer_post_id, status="scheduled")
+        update_carousel(carousel["id"], publer_post_id=str(publer_post_id), status="scheduled")
 
         jobs[job_id]["status"] = "done"
         jobs[job_id]["progress"] = 1.0
         jobs[job_id]["stage"] = "Gotowe"
-        jobs[job_id]["result"] = {"post_id": publer_post_id, "raw": result}
+        jobs[job_id]["result"] = {
+            "post_id": str(publer_post_id),
+            "schedule_result": schedule_result,
+            "final_job_status": final_job_status,
+        }
 
     except Exception as e:
         jobs[job_id]["status"] = "error"
@@ -722,9 +744,26 @@ def show_publer_section(carousel: dict):
 
         # Pokaż wyniki / błędy poprzednich publer-jobów dla tej karuzeli
         for j in sorted(my_pjobs, key=lambda x: x["finished_at"] or 0, reverse=True):
+            res = j.get("result") or {}
             if j["status"] == "done":
-                pid = (j.get("result") or {}).get("post_id", "ok")
-                st.success(f"✅ Karuzela zaplanowana w Publer (post id `{pid}`)")
+                pid = res.get("post_id", "ok")
+                final_state = (res.get("final_job_status") or {})
+                final_state_str = final_state.get("status") or final_state.get("state") or "(brak job_status response)"
+
+                st.success(f"✅ API zwróciło OK — post id `{pid}`, job state: `{final_state_str}`")
+                st.caption(
+                    "ℹ️ Otwórz publer.com → Calendar / Drafts żeby zobaczyć czy post tam jest. "
+                    "Jeśli go nie ma mimo „OK", sprawdź szczegóły poniżej."
+                )
+
+                with st.expander("📤 Wysłany payload"):
+                    st.json(res.get("schedule_result", {}).get("request_payload", {}))
+                with st.expander("📥 Odpowiedź Publer (raw)"):
+                    st.json(res.get("schedule_result", {}).get("response", {}))
+                if res.get("final_job_status"):
+                    with st.expander("⚙️ Status job-a w Publer"):
+                        st.json(res["final_job_status"])
+
             elif j["status"] == "error":
                 st.error(f"❌ Błąd Publer: {j['error']}")
                 if j.get("traceback"):

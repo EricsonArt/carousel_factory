@@ -75,17 +75,11 @@ class PublerClient:
     ) -> dict:
         """
         Planuje karuzelę na Instagramie i/lub TikToku.
-
-        Args:
-            ig_account_ids: ID kont Instagram w Publer
-            tt_account_ids: ID kont TikTok w Publer
-            caption: tekst posta
-            hashtags: lista hashtagów (doklejane do caption)
-            media_ids: ID mediów zwrócone przez upload_media()
-            scheduled_at: czas publikacji ISO 8601, np. "2026-04-30T10:00:00Z"
-
-        Returns:
-            Surowa odpowiedź Publer API (dict z job ID itp.)
+        Returns dict z polami:
+          - request_payload: co poszło do API
+          - status_code: HTTP status
+          - response: surowy JSON z Publer
+          - job_id / post_id (jeśli Publer zwraca)
         """
         if not ig_account_ids and not tt_account_ids:
             raise PublerError("Nie wybrano żadnego konta do publikacji.")
@@ -93,6 +87,9 @@ class PublerClient:
         full_caption = caption.strip()
         if hashtags:
             full_caption += "\n\n" + " ".join(hashtags)
+
+        # TikTok wymaga title (max 90 znaków) — wyciągnij z 1. linii caption
+        tt_title = full_caption.split("\n", 1)[0][:88].strip() or "New post"
 
         accounts = [
             {"id": aid, "scheduled_at": scheduled_at}
@@ -108,9 +105,10 @@ class PublerClient:
                 "media": [{"id": mid, "type": "image"} for mid in media_ids[:10]],
             }
         if tt_account_ids:
-            # TikTok photo carousel: max 35 zdjęć
+            # TikTok photo carousel: max 35 zdjęć. TITLE WYMAGANY.
             networks["tiktok"] = {
                 "type": "photo",
+                "title": tt_title,
                 "text": full_caption,
                 "media": [{"id": mid} for mid in media_ids[:35]],
                 "details": {
@@ -118,6 +116,7 @@ class PublerClient:
                     "comment": True,
                     "promotional": False,
                     "paid": False,
+                    "reminder": False,
                 },
             }
 
@@ -132,6 +131,38 @@ class PublerClient:
             f"{PUBLER_BASE}/posts/schedule",
             json=payload,
             timeout=30,
+        )
+
+        try:
+            response_json = resp.json()
+        except Exception:
+            response_json = {"_raw_text": resp.text[:1000]}
+
+        if not resp.ok:
+            raise PublerError(
+                f"Publer API {resp.status_code}: {response_json}\n"
+                f"Wysłany payload: {payload}"
+            )
+
+        return {
+            "request_payload": payload,
+            "status_code": resp.status_code,
+            "response": response_json,
+            "job_id": (
+                response_json.get("job_id")
+                or (response_json.get("data") or {}).get("job_id")
+            ),
+            "post_id": (
+                response_json.get("id")
+                or (response_json.get("data") or {}).get("id")
+            ),
+        }
+
+    def get_job_status(self, job_id: str) -> dict:
+        """Sprawdza status async job-a (po schedule)."""
+        resp = self._session.get(
+            f"{PUBLER_BASE}/job_status/{job_id}",
+            timeout=15,
         )
         self._raise(resp)
         return resp.json()
