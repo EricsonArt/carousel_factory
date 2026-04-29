@@ -201,6 +201,11 @@ def _overlay_text(img: Image.Image, headline: str, body: str,
     """
     Naklada tekst w stylu TikTok/IG: Montserrat Black + mocny czarny obrys.
     Bez ciemnego boxa za tekstem — sam stroke wystarcza dla czytelnosci.
+
+    Safe zones (zeby nie zaslaniac UI platformy):
+      - top 15%   → TikTok username/header, IG handle
+      - bottom 28% → TikTok action buttons + caption, IG caption
+      → tekst ma siedziec w srodkowych ~57% wysokosci.
     """
     if not headline and not body:
         return img
@@ -208,39 +213,57 @@ def _overlay_text(img: Image.Image, headline: str, body: str,
     W, H = img.size
     draw = ImageDraw.Draw(img)
 
-    # Wraps — chcemy zeby tekst zajmowal max ~40-45% wysokosci slajdu
+    safe_top = int(H * 0.15)
+    safe_bottom = int(H * 0.28)
+    available_h = H - safe_top - safe_bottom
+
+    # Wraps — krotkie linie dla impactu
     headline_lines = wrap_text_for_slide(headline.upper() if headline else "", max_chars_per_line=14)
     body_lines = wrap_text_for_slide(body or "", max_chars_per_line=28)
 
-    # Rozmiary — duzo mniejsze gdy tekstu jest duzo (zeby nie zalewac obrazu)
+    # Mniejsze fonty — naglowek byl za duzy
     total_chars = sum(len(l) for l in headline_lines + body_lines)
-    head_size = _pick_font_size(headline_lines, max_size=110, min_size=64)
-    body_size = _pick_font_size(body_lines, max_size=40, min_size=28)
+    head_size = _pick_font_size(headline_lines, max_size=92, min_size=56)
+    body_size = _pick_font_size(body_lines, max_size=36, min_size=26)
     if total_chars > 120:
         head_size = int(head_size * 0.85)
         body_size = int(body_size * 0.85)
 
-    head_font = _load_font(SLIDE_FONT_HEADLINE, head_size)
-    body_font = _load_font(SLIDE_FONT_BODY, body_size)
+    head_line_gap = 10
+    body_line_gap = 6
+    block_gap = 28
 
-    head_line_gap = 12
-    body_line_gap = 8
-    block_gap = 36
-
-    head_h = sum(_text_height(l, head_font) for l in headline_lines) \
+    def _measure(hs, bs):
+        hf = _load_font(SLIDE_FONT_HEADLINE, hs)
+        bf = _load_font(SLIDE_FONT_BODY, bs)
+        hh = sum(_text_height(l, hf) for l in headline_lines) \
              + head_line_gap * max(0, len(headline_lines) - 1)
-    body_h = sum(_text_height(l, body_font) for l in body_lines) \
+        bh = sum(_text_height(l, bf) for l in body_lines) \
              + body_line_gap * max(0, len(body_lines) - 1)
-    gap = block_gap if headline_lines and body_lines else 0
-    total_h = head_h + gap + body_h
+        g = block_gap if headline_lines and body_lines else 0
+        return hf, bf, hh, bh, g, hh + g + bh
 
-    # Pozycja
+    head_font, body_font, head_h, body_h, gap, total_h = _measure(head_size, body_size)
+
+    # Auto-shrink: jak nie miesci sie w safe zone, skaluj az do min
+    while total_h > available_h and (head_size > 56 or body_size > 26):
+        head_size = max(56, int(head_size * 0.92))
+        body_size = max(26, int(body_size * 0.92))
+        head_font, body_font, head_h, body_h, gap, total_h = _measure(head_size, body_size)
+        if head_size <= 56 and body_size <= 26:
+            break
+
+    # Pozycja w safe zone
     if focus == "top":
-        y_start = int(H * 0.08)
+        y_start = safe_top
     elif focus == "bottom":
-        y_start = H - total_h - int(H * 0.08)
+        y_start = H - safe_bottom - total_h
     else:
-        y_start = (H - total_h) // 2
+        # center w obrebie safe area
+        y_start = safe_top + (available_h - total_h) // 2
+
+    # Hard clamp
+    y_start = max(safe_top, min(y_start, H - safe_bottom - total_h))
 
     # Render headline — Montserrat Black + grube czarne stroke
     y = y_start
