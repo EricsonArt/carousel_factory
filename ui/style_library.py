@@ -156,6 +156,11 @@ def _render_add_style_form(brand_id: str):
 
 
 def _process_new_style(brand_id: str, name: str, uploaded_files, urls_text: str, extra_context: str):
+    from config import ANTHROPIC_API_KEY
+    if not ANTHROPIC_API_KEY:
+        st.error("Brak ANTHROPIC_API_KEY — dodaj klucz do Streamlit Secrets i odśwież stronę.")
+        return
+
     style_id = generate_id("sty")
     style_dir = STYLES_DIR / brand_id / style_id
     ensure_dir(style_dir)
@@ -176,20 +181,21 @@ def _process_new_style(brand_id: str, name: str, uploaded_files, urls_text: str,
         st.error("Brak zdjęć do analizy.")
         return
 
-    try:
-        progress = st.progress(0.0, text=f"Analizuję {len(saved_paths)} zdjęć przez AI Vision...")
+    with st.status(f"Analizuję {len(saved_paths)} zdjęć przez Claude Vision...", expanded=True) as status:
+        try:
+            st.write(f"Przesyłam {len(saved_paths)} zdjęć do AI (może potrwać 30-60 sekund)...")
+            profile = extract_style_profile(saved_paths, extra_context=extra_context)
 
-        profile = extract_style_profile(saved_paths, extra_context=extra_context)
-        progress.progress(0.8, text="Zapisuję profil...")
+            st.write("Zapisuję profil stylu w bazie...")
+            profile["reference_image_paths"] = saved_paths
+            create_style(style_id, brand_id, name, profile)
 
-        profile["reference_image_paths"] = saved_paths
-        create_style(style_id, brand_id, name, profile)
+            status.update(label=f"Styl '{name}' gotowy! ✅", state="complete", expanded=False)
+            st.success(f"Styl **{name}** utworzony! Możesz teraz generować karuzele w tym stylu.")
+            st.balloons()
+            st.rerun()
 
-        progress.progress(1.0, text="Gotowe!")
-
-        st.success(f"Styl **{name}** utworzony! Możesz teraz generować karuzele w tym stylu.")
-        st.balloons()
-        st.rerun()
-
-    except Exception as e:
-        st.error(f"Błąd analizy stylu: {e}")
+        except Exception as e:
+            status.update(label="Błąd analizy stylu ❌", state="error", expanded=True)
+            st.error(f"Błąd: {e}")
+            st.exception(e)
