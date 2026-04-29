@@ -159,6 +159,29 @@ def init_db():
         _migrate_style_profiles(conn)
         _migrate_carousels(conn)
         _migrate_brand_briefs(conn)
+        _migrate_brands_automation(conn)
+
+
+def _migrate_brands_automation(conn):
+    """Dodaje kolumny automatyzacji do brands."""
+    existing = {r["name"] for r in conn.execute("PRAGMA table_info(brands)").fetchall()}
+    new_cols = {
+        "auto_enabled": "INTEGER DEFAULT 0",
+        "auto_posts_per_day": "INTEGER DEFAULT 3",
+        "auto_days_ahead": "INTEGER DEFAULT 7",
+        "auto_style_id": "TEXT",
+        "auto_ig_account_ids": "TEXT",   # JSON list[str]
+        "auto_tt_account_ids": "TEXT",   # JSON list[str]
+        "auto_language": "TEXT DEFAULT 'pl'",
+        "auto_model": "TEXT DEFAULT 'nano_banana_pro'",
+        "auto_last_run": "TEXT",
+    }
+    for col, col_type in new_cols.items():
+        if col not in existing:
+            try:
+                conn.execute(f"ALTER TABLE brands ADD COLUMN {col} {col_type}")
+            except sqlite3.OperationalError:
+                pass
 
 
 def _migrate_brand_briefs(conn):
@@ -543,3 +566,32 @@ def get_today_total_cost() -> float:
             SELECT SUM(cost_usd) as total FROM usage_log WHERE date = ?
         """, (today,)).fetchone()
     return (row["total"] or 0.0) if row else 0.0
+
+
+# ─────────────────────────────────────────────────────────────
+# AUTOMATION CONFIG
+# ─────────────────────────────────────────────────────────────
+
+_AUTO_JSON_FIELDS = ["auto_ig_account_ids", "auto_tt_account_ids"]
+
+
+def get_automation_config(brand_id: str) -> dict:
+    """Zwraca pola automatyzacji z tabeli brands."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM brands WHERE id = ?", (brand_id,)).fetchone()
+    d = _row_to_dict(row, _AUTO_JSON_FIELDS + ["social_handles"]) or {}
+    return {k: d[k] for k in d if k.startswith("auto_")} if d else {}
+
+
+def update_automation_config(brand_id: str, **fields):
+    """Aktualizuje pola automatyzacji w tabeli brands."""
+    if not fields:
+        return
+    for f in _AUTO_JSON_FIELDS:
+        if f in fields and isinstance(fields[f], (list, dict)):
+            fields[f] = json.dumps(fields[f], ensure_ascii=False)
+    fields["updated_at"] = now_iso()
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    vals = list(fields.values()) + [brand_id]
+    with get_conn() as conn:
+        conn.execute(f"UPDATE brands SET {cols} WHERE id = ?", vals)

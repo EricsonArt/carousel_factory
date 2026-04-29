@@ -245,7 +245,7 @@ with st.sidebar:
     st.markdown("""
     <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #EAE8F2;">
         <div style="font-size:0.6rem;color:#9CA3AF;text-align:center;letter-spacing:0.06em;">
-            Phase 1  ·  v0.3.0
+            Phase 2  ·  v0.4.0
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -339,7 +339,7 @@ if not st.session_state.active_brand_id:
     }
     </style>
     <div class="wrap">
-        <div class="badge"><span class="badge-dot"></span>Phase 1 &middot; v0.3.0 &middot; Manual generation ready</div>
+        <div class="badge"><span class="badge-dot"></span>Phase 2 &middot; v0.4.0 &middot; Full automation ready</div>
         <div class="hero-icon">🎠</div>
         <h1>Witaj w <span class="hl">KaruzelAI</span></h1>
         <p class="lead">Studio do automatycznego tworzenia <strong>wiralowych karuzel</strong> na Instagram i TikTok. AI uczy się Twojego stylu, pisze copy i generuje slajdy.</p>
@@ -405,13 +405,14 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-tab_brief, tab_product, tab_icp, tab_styles, tab_generate, tab_history = st.tabs([
+tab_brief, tab_product, tab_icp, tab_styles, tab_generate, tab_history, tab_auto = st.tabs([
     "🧠  Brief marki",
     "💰  Produkt",
     "🎯  ICP",
     "🎨  Style",
     "🎠  Generator",
     "📜  Historia",
+    "🤖  Automat",
 ])
 
 with tab_brief:
@@ -435,3 +436,7 @@ with tab_generate:
 with tab_history:
     from ui.history import render_history
     render_history(st.session_state.active_brand_id)
+
+with tab_auto:
+    from ui.automation import render_automation
+    render_automation(st.session_state.active_brand_id)
