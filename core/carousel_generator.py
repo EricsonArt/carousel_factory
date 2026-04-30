@@ -91,12 +91,23 @@ STYL VISUAL (do inspiracji hookow i tonu):
         language_directive = (
             "- LANGUAGE: ENGLISH. All slide text (headlines, body, caption, hashtags labels) "
             "must be in fluent, native English. Do NOT use any Polish words or characters. "
-            "Hashtags should be English/global (e.g. #tips, #howto, #productivity)."
+            "Hashtags should be English/global (e.g. #tips, #howto, #productivity).\n"
+            "- CURRENCY: convert ALL prices/amounts/revenue claims from the brief (which are in PLN) "
+            "to USD. Use approximate rate: 4 PLN ≈ 1 USD. Round prices to nearest $5 (e.g. 99 PLN → $25, "
+            "199 PLN → $50). Round revenue/social-proof figures to nearest $50 or $100 "
+            "(e.g. 8400 PLN → $2,100, 15000 PLN → $3,750). Display as '$X' or 'X USD' — NEVER 'PLN' or 'zł'.\n"
+            "- DASHES: use ONLY plain hyphen-minus '-' (U+002D). NEVER use em-dash '—' (U+2014), "
+            "en-dash '–' (U+2013), figure-dash '‒' or horizontal-bar '―'. If you want a long dash, "
+            "type two hyphens '--' or use a comma."
         )
     else:
         language_directive = (
             "- LANGUAGE: POLSKI. Z poprawnymi znakami diakrytycznymi (ą ę ó ł ś ć ż ź ń). "
-            "Hashtagi mieszane PL i EN."
+            "Hashtagi mieszane PL i EN.\n"
+            "- WALUTA: zostaw kwoty z briefa w PLN (lub uzyj 'zl' / '{X} zl').\n"
+            "- MYSLNIKI: uzywaj WYLACZNIE zwyklego dywizu '-' (U+002D). NIGDY nie uzywaj "
+            "pauzy '—' (U+2014), polpauzy '–' (U+2013) ani podobnych. Jak chcesz dluzszy myslnik — "
+            "napisz '--' albo uzyj przecinka."
         )
 
     if framework == "viral_loop":
@@ -140,7 +151,94 @@ WAZNE:
 
 Zwroc JSON zgodny ze schematem opisanym w system promptcie. TYLKO JSON.
 """
-    return call_claude_json(prompt, system=system_prompt, max_tokens=max_tokens)
+    raw = call_claude_json(prompt, system=system_prompt, max_tokens=max_tokens)
+    # Defensywne post-processing — gwarantujemy zwykle dywizy nawet gdy LLM przeoczy instrukcje
+    return _normalize_copy_text(raw, language=language)
+
+
+# Mapowanie wszystkich wariantow myslnika Unicode -> zwykly hyphen-minus
+_DASH_REPLACEMENTS = {
+    "—": "-",  # em-dash —
+    "–": "-",  # en-dash –
+    "‒": "-",  # figure dash ‒
+    "―": "-",  # horizontal bar ―
+    "−": "-",  # minus sign −
+    "﹘": "-",  # small em dash
+    "﹣": "-",  # small hyphen-minus
+    "－": "-",  # fullwidth hyphen
+}
+
+
+def _normalize_text_field(s) -> str:
+    if not isinstance(s, str):
+        return s
+    for src, dst in _DASH_REPLACEMENTS.items():
+        if src in s:
+            s = s.replace(src, dst)
+    return s
+
+
+def _convert_pln_to_usd_in_text(s: str) -> str:
+    """
+    Defensywne fallback: jezeli LLM mimo instrukcji zostawi 'PLN' / 'zl' w trybie EN,
+    zamienia na 'USD' / '$' z przelicznikiem ~4:1. Tylko proste wzorce — nie ruszamy
+    skomplikowanych zdan, zeby nie zepsuc gramatyki.
+    """
+    import re
+    if not isinstance(s, str):
+        return s
+
+    # Pattern: liczba (z opc. spacjami/przecinkiem/kropka jako separator) + 'PLN' / 'zl' / 'zł'
+    def _replace_amount(match):
+        num_str = match.group(1).replace(" ", "").replace(",", "").replace(".", "")
+        try:
+            pln_amount = float(num_str)
+            usd_amount = pln_amount / 4.0
+            if usd_amount < 50:
+                rounded = round(usd_amount / 5) * 5
+            elif usd_amount < 1000:
+                rounded = round(usd_amount / 50) * 50
+            else:
+                rounded = round(usd_amount / 100) * 100
+            return f"${int(rounded):,}"
+        except (ValueError, ZeroDivisionError):
+            return match.group(0)
+
+    s = re.sub(r"(\d[\d\s,\.]*)\s*(?:PLN|zl|zł)\b", _replace_amount, s, flags=re.IGNORECASE)
+    return s
+
+
+def _normalize_copy_text(copy_data: dict, language: str = "pl") -> dict:
+    """
+    Czysci tekst we wszystkich polach JSON-a copywritera:
+    - zamienia em/en-dash na zwykly '-'
+    - dla EN: defensywnie konwertuje PLN -> USD jezeli LLM zostawi
+    """
+    if not isinstance(copy_data, dict):
+        return copy_data
+
+    def _process(value):
+        v = _normalize_text_field(value)
+        if language == "en":
+            v = _convert_pln_to_usd_in_text(v)
+        return v
+
+    for slide in copy_data.get("slides", []) or []:
+        if not isinstance(slide, dict):
+            continue
+        for k in ("headline", "body"):
+            if k in slide:
+                slide[k] = _process(slide[k])
+        if isinstance(slide.get("alternatives"), list):
+            slide["alternatives"] = [_process(a) for a in slide["alternatives"]]
+
+    if "caption" in copy_data:
+        copy_data["caption"] = _process(copy_data["caption"])
+
+    if isinstance(copy_data.get("hashtags"), list):
+        copy_data["hashtags"] = [_normalize_text_field(h) for h in copy_data["hashtags"]]
+
+    return copy_data
 
 
 # ─────────────────────────────────────────────────────────────
