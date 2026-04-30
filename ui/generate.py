@@ -244,7 +244,12 @@ def _run_publer_job(jobs: dict, job_id: str, carousel: dict,
             or schedule_result.get("job_id")
             or "ok"
         )
-        update_carousel(carousel["id"], publer_post_id=str(publer_post_id), status="scheduled")
+        update_carousel(
+            carousel["id"],
+            publer_post_id=str(publer_post_id),
+            status="scheduled",
+            scheduled_at=scheduled_iso,
+        )
 
         jobs[job_id]["status"] = "done"
         jobs[job_id]["progress"] = 1.0
@@ -882,12 +887,14 @@ def show_publer_section(carousel: dict, key_suffix: str = "gen"):
         kpref = f"{key_suffix}_{car_id}"
         accounts_key = "publer_accounts"
 
+        # Klient jest zawsze tworzony — potrzebny też do delete/reschedule
+        client = PublerClient(PUBLER_API_KEY, PUBLER_WORKSPACE_ID)
+
         # ── Załaduj konta + Test ──────────────────────────────────────────
         col_load, col_test, _ = st.columns([1, 1, 2])
         with col_load:
             if st.button("🔄 Załaduj konta", key=f"load_acc_{kpref}"):
                 try:
-                    client = PublerClient(PUBLER_API_KEY, PUBLER_WORKSPACE_ID)
                     if not PUBLER_WORKSPACE_ID:
                         workspaces = client.get_workspaces()
                         if workspaces:
@@ -1079,13 +1086,24 @@ def show_publer_section(carousel: dict, key_suffix: str = "gen"):
             if j["status"] == "done":
                 pid = res.get("post_id", "ok")
                 final_state = (res.get("final_job_status") or {})
-                final_state_str = final_state.get("status") or final_state.get("state") or "(brak job_status response)"
+                final_state_str = final_state.get("status") or final_state.get("state") or None
 
-                st.success(f"✅ API zwróciło OK — post id `{pid}`, job state: `{final_state_str}`")
+                if final_state_str:
+                    st.success(f"✅ Publer potwierdził — post id `{pid}`, job state: `{final_state_str}`")
+                else:
+                    st.warning(
+                        f"⚠️ API przyjęło post (job `{pid}`), ale **nie udało się potwierdzić** że "
+                        f"Publer go faktycznie utworzył (polling job-status wygasł po 20s). "
+                        f"Sprawdź ręcznie publer.com → Calendar / Drafts."
+                    )
                 st.caption(
                     "ℹ️ Otwórz publer.com → Calendar / Drafts żeby zobaczyć czy post tam jest. "
-                    "Jeśli go nie ma mimo 'OK', sprawdź szczegóły poniżej."
+                    "Jeśli go nie ma mimo 'OK', sprawdź szczegóły poniżej (szczególnie 'Odpowiedź Publer')."
                 )
+
+                poll_err = res.get("schedule_result", {}).get("poll_error")
+                if poll_err:
+                    st.warning(f"⚠️ Błąd podczas sprawdzania statusu job-a: `{poll_err}`")
 
                 with st.expander("📤 Wysłany payload"):
                     st.json(res.get("schedule_result", {}).get("request_payload", {}))

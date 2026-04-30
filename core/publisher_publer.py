@@ -154,8 +154,9 @@ class PublerClient:
 
         # ── Weryfikacja: czekamy az Publer faktycznie utworzy posty ──────────
         job_status_final: Optional[dict] = None
+        poll_error: Optional[str] = None
         if verify and job_id:
-            for _ in range(10):  # ~20s max
+            for attempt in range(15):  # ~30s max
                 try:
                     js = self.get_job_status(job_id)
                     job_status_final = js
@@ -180,8 +181,8 @@ class PublerClient:
                         break
                 except PublerError:
                     raise
-                except Exception:
-                    pass
+                except Exception as poll_exc:
+                    poll_error = str(poll_exc)
                 time.sleep(2)
 
         return {
@@ -194,6 +195,7 @@ class PublerClient:
                 or (response_json.get("data") or {}).get("id")
             ),
             "job_status_final": job_status_final,
+            "poll_error": poll_error,
         }
 
     def get_job_status(self, job_id: str) -> dict:
