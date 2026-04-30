@@ -12,6 +12,7 @@ import streamlit as st
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from core.carousel_generator import generate_carousel, export_carousel_as_zip
+from core.viral_replicator import replicate_viral_carousel, ViralFetchError
 from ui.text_settings import render_text_settings_panel
 from db import get_brand, get_brief, list_styles, update_carousel
 from config import (
@@ -85,6 +86,70 @@ def _run_generation_job(jobs: dict, job_id: str, brand_id: str, params: dict):
         jobs[job_id]["status"] = "done"
         jobs[job_id]["stage"] = "Gotowe"
         jobs[job_id]["progress"] = 1.0
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["traceback"] = traceback.format_exc()
+    finally:
+        jobs[job_id]["finished_at"] = time.time()
+
+
+def _start_viral_job(brand_id: str, params: dict) -> str:
+    """Startuje job viralowej replikacji (yt-dlp scrape -> Vision -> Pillow)."""
+    jobs = _get_jobs()
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {
+        "id": job_id,
+        "brand_id": brand_id,
+        "topic": f"🎬 Viral: {params['url'][:50]}",
+        "language": params.get("language", "pl"),
+        "status": "running",
+        "stage": "Pobieram viralu...",
+        "progress": 0.0,
+        "started_at": time.time(),
+        "finished_at": None,
+        "carousel": None,
+        "error": None,
+        "traceback": None,
+        "is_viral": True,
+    }
+    thread = threading.Thread(
+        target=_run_viral_job,
+        args=(jobs, job_id, brand_id, params),
+        daemon=True,
+    )
+    add_script_run_ctx(thread)
+    thread.start()
+    return job_id
+
+
+def _run_viral_job(jobs: dict, job_id: str, brand_id: str, params: dict):
+    """Watek viralowy — wywoluje replicate_viral_carousel."""
+    def cb(stage: str, pct: float):
+        if job_id in jobs:
+            jobs[job_id]["stage"] = stage
+            jobs[job_id]["progress"] = float(pct)
+
+    try:
+        carousel = replicate_viral_carousel(
+            url=params["url"],
+            brand_id=brand_id,
+            style_id=params.get("style_id"),
+            use_ai_images=params.get("use_ai_images", True),
+            prefer_provider=params.get("prefer_provider"),
+            image_quality=params.get("image_quality", "low"),
+            model_override=params.get("model_override"),
+            language=params.get("language", "pl"),
+            text_settings=params.get("text_settings"),
+            progress_callback=cb,
+        )
+        jobs[job_id]["carousel"] = carousel
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["stage"] = "Gotowe"
+        jobs[job_id]["progress"] = 1.0
+    except ViralFetchError as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = f"Pobieranie viralu: {e}"
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
@@ -523,6 +588,9 @@ def render_generate(brand_id: str):
 
     # ── AI: wymyśl najlepszy temat ─────────────────────────────────────────────
     _render_topic_ai_section(brand_id, brief)
+
+    # ── Viral Replicator ──────────────────────────────────────────────────────
+    _render_viral_replicator_section(brand_id, brief, styles)
 
     # ── Formularz generacji ────────────────────────────────────────────────────
     section_title("Parametry generacji", icon="⚙️")
@@ -967,3 +1035,111 @@ def show_publer_section(carousel: dict, key_suffix: str = "gen"):
 
 # _send_to_publer został zastąpiony wątkiem _start_publer_job + _run_publer_job (powyżej).
 # Synchroniczna wersja przerywała się przy auto-refresh fragmentu co 2s.
+
+
+# ─────────────────────────────────────────────────────────────
+# VIRAL REPLICATOR — sekcja UI
+# ─────────────────────────────────────────────────────────────
+
+def _render_viral_replicator_section(brand_id: str, brief: dict, styles: list):
+    """Sekcja: wklej URL viralu TT/IG -> AI replikuje strukture na karuzele dla marki."""
+    st.markdown(
+        """<div style="background:linear-gradient(135deg,#FEF3C7,#FDE68A);border:1px solid #F59E0B;
+            border-radius:14px;padding:1rem 1.25rem;margin-bottom:1rem;">
+            <div style="font-size:1.05rem;font-weight:800;color:#78350F;margin-bottom:0.3rem;">
+                🎬 Viral Replicator
+            </div>
+            <div style="font-size:0.85rem;color:#92400E;line-height:1.5;">
+                Wklej link viralowego posta z TikToka lub Instagrama. AI zanalizuje
+                strukture, hook i progresje narracji, a potem zreplikuje je dla Twojej
+                marki (z briefa) — nowe tla, nowe copy, ten sam DNA. CTA na ostatnim
+                slajdzie pójdzie na <code>brief.cta_url</code>.
+            </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+    cta_url = (brief.get("cta_url") or "").strip()
+    if not cta_url:
+        st.warning(
+            "⚠️ Brak `cta_url` w briefie marki — bez linku CTA na ostatnim slajdzie "
+            "bedzie generyczne. Wpisz w **Brief marki → Link CTA**, np. `flipzone.pl`."
+        )
+
+    with st.form("viral_replicator"):
+        viral_url = st.text_input(
+            "Link viralu (TikTok lub Instagram)",
+            placeholder="np. https://www.tiktok.com/@user/video/1234567890 lub https://www.instagram.com/p/abc123/",
+            help="Obsluguje TikTok karuzele zdjeciowe, TikTok wideo (cover frame) "
+                 "oraz Instagram posty/karuzele. Scraping przez yt-dlp (darmowy).",
+        )
+
+        col_lang, col_style = st.columns([1, 2])
+        with col_lang:
+            v_language = st.selectbox(
+                "🌐 Język repliki",
+                options=["pl", "en"],
+                format_func=lambda x: {"pl": "🇵🇱 Polski", "en": "🇬🇧 English"}[x],
+                index=0,
+                key="viral_lang",
+            )
+        with col_style:
+            if styles:
+                v_style_opts = {None: "— bez stylu —"}
+                preferred_id = None
+                for s in styles:
+                    label = s["name"] + ("  ⭐" if s.get("is_preferred") else "")
+                    v_style_opts[s["id"]] = label
+                    if s.get("is_preferred"):
+                        preferred_id = s["id"]
+                v_default_idx = list(v_style_opts.keys()).index(preferred_id) if preferred_id else 0
+                v_style_id = st.selectbox(
+                    "Styl wizualny dla nowych slajdów",
+                    options=list(v_style_opts.keys()),
+                    format_func=lambda k: v_style_opts[k],
+                    index=v_default_idx,
+                    key="viral_style",
+                )
+            else:
+                v_style_id = None
+                st.caption("Brak stylów — replika użyje generycznego.")
+
+        # Generator obrazów — uproszczony wybór (Nano Banana Pro / gradient fallback)
+        from config import GEMINI_API_KEYS as _gk
+        v_use_ai = bool(_gk)
+        if v_use_ai:
+            st.caption("🟢 Tła nowych slajdów: **Nano Banana Pro** (Gemini 3 Pro Image, GRATIS)")
+            v_prefer = "gemini"
+            v_model = "gemini-3-pro-image-preview"
+        else:
+            st.caption("⚠️ Brak klucza Gemini — slajdy dostaną gradient z palety stylu.")
+            v_prefer = None
+            v_model = None
+
+        v_submitted = st.form_submit_button("🎬 Replikuj viralu", type="primary", use_container_width=True)
+
+    if v_submitted:
+        if not viral_url.strip():
+            st.error("Wklej link viralu zanim klikniesz Replikuj.")
+            return
+        url_l = viral_url.strip().lower()
+        if not ("tiktok.com" in url_l or "instagram.com" in url_l):
+            st.error("Link musi byc z tiktok.com lub instagram.com.")
+            return
+
+        job_id = _start_viral_job(brand_id, {
+            "url": viral_url.strip(),
+            "style_id": v_style_id,
+            "use_ai_images": v_use_ai,
+            "prefer_provider": v_prefer,
+            "image_quality": "low",
+            "model_override": v_model,
+            "language": v_language,
+            "text_settings": st.session_state.get("generate_text_settings"),
+        })
+        st.success(
+            f"✅ Replikacja ruszyła w tle (job `{job_id}`). yt-dlp pobiera viralu, "
+            f"Claude Vision analizuje strukture, potem nowa karuzela. "
+            f"Postęp w panelu na górze."
+        )
+        st.rerun()
