@@ -538,16 +538,67 @@ def export_carousel_as_zip(carousel_id: str) -> Path:
 # REPAIR — regeneruje brakujace tla AI dla istniejacych karuzel
 # ─────────────────────────────────────────────────────────────
 
-# Provider'y oznaczajace ze tlo NIE bylo wygenerowane przez AI
-_BROKEN_PROVIDERS = {"fallback_quota", "fallback_error", "error"}
+# Provider'y AI ktore traktujemy jako "OK" (tla wygenerowane prawdziwie)
+_OK_PROVIDERS = {"gemini", "openai", "replicate"}
+
+# Provider'y wprost wskazujace na fallback (gradient/error)
+_KNOWN_BROKEN_PROVIDERS = {
+    "fallback_quota", "fallback_error", "error", "local", "gradient", "fallback",
+}
 
 
-def get_broken_slide_indices(carousel: dict) -> list[int]:
-    """Zwraca indeksy slajdow ktore maja zastepcze tlo (Gemini quota / error)."""
+def _looks_like_solid_background(image_path: str) -> bool:
+    """
+    Heurystyka: jesli obraz jest praktycznie jednolitym kolorem (std-dev < 10),
+    to znaczy ze to gradient/solid fallback, nie AI tlo.
+    Zwraca False jak nie da sie odczytac (zachowawczo — nie traktujemy jako broken).
+    """
+    try:
+        from PIL import Image, ImageStat
+        from pathlib import Path as _P
+        if not image_path or not _P(image_path).exists():
+            return False
+        with Image.open(image_path) as img:
+            # Sample srodek obrazu (gdzie jest prawdziwy content, nie krawedz)
+            w, h = img.size
+            crop = img.crop((w // 4, h // 4, 3 * w // 4, 3 * h // 4)).convert("RGB")
+            stat = ImageStat.Stat(crop)
+            # Sredni std-dev po 3 kanalach
+            avg_std = sum(stat.stddev) / 3
+            return avg_std < 10  # bardzo niski variance = jednolite tlo
+    except Exception:
+        return False
+
+
+def get_broken_slide_indices(carousel: dict, *, deep_scan: bool = False) -> list[int]:
+    """
+    Zwraca indeksy slajdow ktore prawdopodobnie maja zastepcze (nie-AI) tlo.
+
+    Logika:
+      1. Provider explicite z _KNOWN_BROKEN_PROVIDERS → broken
+      2. Provider pusty / unknown / nie-AI → broken (zachowawczo)
+      3. Provider w _OK_PROVIDERS (gemini/openai/replicate) → OK
+      4. (Opcja deep_scan) Sprawdz plik — jak std-dev kolorow w srodku < 10,
+         to gradient/solid → broken (uzyteczne dla starych karuzel
+         ktore mialy wpisany provider 'gemini' ale plik faktycznie padl)
+    """
     broken = []
     for i, slide in enumerate(carousel.get("slides") or []):
-        provider = (slide.get("image_provider") or "").lower()
-        if any(provider.startswith(p) for p in _BROKEN_PROVIDERS):
+        provider = (slide.get("image_provider") or "").lower().strip()
+
+        is_broken = False
+        if not provider:
+            is_broken = True  # pusty = na pewno cos nie tak
+        elif any(provider.startswith(p) for p in _KNOWN_BROKEN_PROVIDERS):
+            is_broken = True
+        elif not any(provider.startswith(p) for p in _OK_PROVIDERS):
+            is_broken = True  # nieznany provider = traktuj jako broken
+        elif deep_scan:
+            # Provider mowi gemini/openai ale plik moze byc fallback (stare karuzele)
+            if _looks_like_solid_background(slide.get("image_path", "")):
+                is_broken = True
+
+        if is_broken:
             broken.append(i)
     return broken
 
@@ -575,7 +626,8 @@ def repair_carousel_backgrounds(
     text_settings = merge_text_settings(brief.get("text_settings"))
 
     slides = list(carousel.get("slides") or [])
-    broken_idx = get_broken_slide_indices({"slides": slides})
+    # deep_scan=True — dla starych karuzel sprawdz tez pliki na dysku
+    broken_idx = get_broken_slide_indices({"slides": slides}, deep_scan=True)
 
     if not broken_idx:
         return {"repaired": 0, "failed": 0, "skipped": len(slides),

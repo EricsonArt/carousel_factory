@@ -206,9 +206,24 @@ def render_history(brand_id: str):
 
             # ── Repair backgrounds (Gemini fallback recovery) ─────────────────
             full_carousel = get_carousel(c["id"]) or c
-            broken_idx = get_broken_slide_indices(full_carousel)
+            # deep_scan=True: sprawdza tez pliki na dysku (low-variance = solid bg)
+            # Lapie stare karuzele ktore mialy wpisany provider 'gemini' ale faktyczny
+            # plik to gradient (race condition w starszej wersji kodu).
+            broken_idx = get_broken_slide_indices(full_carousel, deep_scan=True)
             n_broken = len(broken_idx)
             n_total = len(full_carousel.get("slides") or [])
+
+            # Debug: pokaz providerow dla kazdego slajdu (collapsed by default)
+            with st.expander("🔍 Debug: providery slajdow", expanded=False):
+                slides_dbg = full_carousel.get("slides") or []
+                if not slides_dbg:
+                    st.caption("Brak slajdow w bazie.")
+                else:
+                    for idx, sl in enumerate(slides_dbg):
+                        prov = sl.get("image_provider") or "(empty)"
+                        path = sl.get("image_path") or "(empty)"
+                        broken_marker = "🔴" if idx in broken_idx else "🟢"
+                        st.text(f"{broken_marker} Slajd {idx+1}: provider='{prov}' path='{Path(path).name if path != '(empty)' else path}'")
 
             if n_broken > 0:
                 st.markdown('<div style="margin-top:1rem;"></div>', unsafe_allow_html=True)
