@@ -990,10 +990,65 @@ def show_publer_section(carousel: dict, key_suffix: str = "gen"):
         my_pjobs = [j for j in publer_jobs.values() if j["carousel_id"] == car_id]
         active_pjob = next((j for j in my_pjobs if j["status"] == "running"), None)
 
+        # Czy karuzela jest JUŻ zaplanowana w Publerze? (ma publer_post_id)
+        existing_post_id = (carousel.get("publer_post_id") or "").strip()
+        existing_status = (carousel.get("status") or "").strip()
+        is_already_scheduled = bool(existing_post_id and existing_status == "scheduled")
+
         if active_pjob:
             st.info(f"🚀 Wysyłam do Publer... {int(active_pjob['progress']*100)}% — {active_pjob['stage']}")
             st.progress(max(0.05, min(1.0, active_pjob["progress"])))
+        elif is_already_scheduled:
+            # Już zaplanowane — blok "Wyślij ponownie" + opcje reschedule/anuluj
+            existing_sched = carousel.get("scheduled_at", "")
+            try:
+                existing_sched_local = datetime.fromisoformat(existing_sched.replace("Z", "+00:00")) \
+                    .astimezone().strftime("%d.%m.%Y o %H:%M")
+            except Exception:
+                existing_sched_local = existing_sched
+            st.success(
+                f"✅ **Już zaplanowane w Publerze** na **{existing_sched_local}** "
+                f"(post id: `{existing_post_id}`).\n\n"
+                f"Aby zmienic czas — uzyj guzikow ponizej (skasuje stary post zeby uniknac duplikatu)."
+            )
+
+            col_resched, col_cancel = st.columns(2)
+            with col_resched:
+                if st.button(
+                    "🔄 Zmień termin (skasuje stary)",
+                    key=f"reschedule_{kpref}",
+                    type="primary",
+                    disabled=not (selected_ig or selected_tt),
+                    help="Kasuje stary scheduled post w Publerze i tworzy nowy w wybranym powyżej terminie.",
+                ):
+                    try:
+                        client.delete_post(existing_post_id)
+                        update_carousel(car_id, publer_post_id="", status="draft", scheduled_at="")
+                        # Od razu start nowego scheduling job-a
+                        pjob_id = _start_publer_job(carousel, selected_ig, selected_tt, scheduled_iso)
+                        st.success(f"Stary post skasowany. Tworzę nowy (`{pjob_id}`).")
+                        st.rerun()
+                    except PublerError as e:
+                        st.error(
+                            f"❌ Nie udało się skasować starego postu: {e}\n\n"
+                            f"Skasuj go ręcznie na publer.com → Calendar (post id `{existing_post_id}`), "
+                            f"potem klik tu jeszcze raz."
+                        )
+            with col_cancel:
+                if st.button(
+                    "❌ Anuluj publikację",
+                    key=f"cancel_{kpref}",
+                    help="Kasuje scheduled post w Publerze. Karuzela wraca do statusu draft.",
+                ):
+                    try:
+                        client.delete_post(existing_post_id)
+                        update_carousel(car_id, publer_post_id="", status="draft", scheduled_at="")
+                        st.success("Anulowano publikację. Możesz zaplanować ponownie.")
+                        st.rerun()
+                    except PublerError as e:
+                        st.error(f"❌ Nie udało się skasować: {e}")
         else:
+            # Pierwsze wysłanie — normalny flow
             if st.button(
                 "🚀 Wyślij do Publer",
                 key=f"send_publer_{kpref}",

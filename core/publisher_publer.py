@@ -205,6 +205,22 @@ class PublerClient:
         self._raise(resp)
         return resp.json()
 
+    def delete_post(self, post_id: str) -> bool:
+        """
+        Kasuje zaplanowany post w Publerze (DELETE /posts/{id}).
+        Zwraca True jesli sukces. Tolerancyjny na 404 (post juz nie istnieje).
+        """
+        if not post_id:
+            return False
+        resp = self._session.delete(
+            f"{PUBLER_BASE}/posts/{post_id}",
+            timeout=15,
+        )
+        if resp.status_code == 404:
+            return True  # Already gone — traktujemy jako sukces
+        self._raise(resp)
+        return True
+
     # ── Helpers ──────────────────────────────────────────────────────────────
 
     @staticmethod
