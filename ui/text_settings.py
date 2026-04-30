@@ -53,10 +53,14 @@ _PREVIEW_BODIES = {
 }
 
 
-def _build_preview_image(settings: dict, slide_index: int) -> Image.Image:
+def _build_preview_image(settings: dict, slide_index: int,
+                          headline: Optional[str] = None,
+                          body: Optional[str] = None) -> Image.Image:
     """
     Buduje placeholder slajd 1080x1350 z gradientem + naklada tekst wedlug settings.
     Dorzuca delikatne kropkowane linie pokazujace safe zones (TikTok/IG UI).
+
+    headline/body: jesli podane, uzywa tych zamiast domyslnych przykladow.
     """
     # 1) Tlo: diagonalny gradient w neutralnych tonach.
     #    Optymalizacja: tworzymy 2x2 pixel image z 4 narozami i resize'ujemy bicubic
@@ -69,8 +73,11 @@ def _build_preview_image(settings: dict, slide_index: int) -> Image.Image:
     img = seed.resize((SLIDE_WIDTH, SLIDE_HEIGHT), Image.BICUBIC)
 
     # 2) Naklada tekst zgodnie z aktualnymi settings
-    headline = _PREVIEW_HEADLINES.get(slide_index, _PREVIEW_HEADLINES[0])
-    body = _PREVIEW_BODIES.get(settings.get("text_length", "medium"), _PREVIEW_BODIES["medium"])
+    if headline is None:
+        headline = _PREVIEW_HEADLINES.get(slide_index, _PREVIEW_HEADLINES[0])
+    if body is None:
+        body = _PREVIEW_BODIES.get(settings.get("text_length", "medium"),
+                                     _PREVIEW_BODIES["medium"])
     img = apply_text_to_image(img, headline, body,
                                 slide_index=slide_index,
                                 text_settings=settings,
@@ -281,9 +288,30 @@ def render_text_settings_panel(brand_id: str, brief: dict,
                 label_visibility="collapsed",
             )
 
-            # Generuj preview obraz live
+            # Edytowalne pola tekstu — wpisz swoj przyklad, preview reaguje
+            preview_headline = st.text_input(
+                "Naglowek (podglad)",
+                value=_PREVIEW_HEADLINES.get(preview_slide, _PREVIEW_HEADLINES[0]),
+                key=f"{key_prefix}_preview_headline_{preview_slide}",
+                help="Wpisz prawdziwy naglowek ktorego planujesz uzyc — "
+                     "preview pokaze dokladnie jak bedzie wygladal.",
+            )
+            preview_body = st.text_area(
+                "Body (podglad)",
+                value=_PREVIEW_BODIES.get(new_settings.get("text_length", "medium"),
+                                            _PREVIEW_BODIES["medium"]),
+                key=f"{key_prefix}_preview_body_{preview_slide}_{new_settings.get('text_length','medium')}",
+                height=70,
+                help="Body tekstu pod naglowkiem.",
+            )
+
+            # Generuj preview obraz live z wpisanym tekstem
             try:
-                preview_img = _build_preview_image(new_settings, preview_slide)
+                preview_img = _build_preview_image(
+                    new_settings, preview_slide,
+                    headline=preview_headline,
+                    body=preview_body,
+                )
                 buf = io.BytesIO()
                 preview_img.save(buf, "JPEG", quality=85)
                 buf.seek(0)
