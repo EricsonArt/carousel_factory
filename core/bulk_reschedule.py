@@ -1,0 +1,178 @@
+"""
+Bulk reschedule — przesuwa wiele karuzel naraz na nowe terminy w przyszlosci
+z losowymi odstepami (np. co 1-2h ±15 min jitter).
+
+Dla kazdej karuzeli:
+  - jezeli ma publer_post_id i status='scheduled' → DELETE starego z Publera, schedule nowego
+  - jezeli draft (brak publer_post_id) → schedule nowego od scratch
+  - jezeli posted/failed → skip (nie ruszamy historii)
+"""
+from __future__ import annotations
+import random
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from core.publisher_publer import PublerClient, PublerError
+from db import get_carousel, update_carousel
+
+
+def bulk_reschedule(
+    carousel_ids: list[str],
+    start_dt_utc: datetime,
+    gap_minutes_min: int = 60,
+    gap_minutes_max: int = 120,
+    jitter_minutes: int = 15,
+    publer_api_key: str = "",
+    publer_workspace_id: str = "",
+    ig_account_ids: Optional[list[str]] = None,
+    tt_account_ids: Optional[list[str]] = None,
+    progress_callback=None,
+) -> dict:
+    """
+    Przeplanowuje liste karuzel zaczynajac od start_dt_utc, kazda kolejna
+    losowo gap_minutes_min..gap_minutes_max + jitter ±jitter_minutes.
+
+    Zwraca: {
+      "total": N,
+      "scheduled": int,    # ile zaplanowanych w Publerze
+      "db_only": int,      # ile zaktualizowanych tylko w DB (brak Publera)
+      "skipped": int,      # ile pominietych (posted/failed/no_images)
+      "errors": int,
+      "results": [...],    # szczegoly per-karuzela
+    }
+    """
+    ig_account_ids = ig_account_ids or []
+    tt_account_ids = tt_account_ids or []
+
+    use_publer = bool(publer_api_key and (ig_account_ids or tt_account_ids))
+    client: Optional[PublerClient] = None
+    if use_publer:
+        client = PublerClient(publer_api_key, publer_workspace_id)
+        if not publer_workspace_id:
+            workspaces = client.get_workspaces()
+            if workspaces:
+                client.set_workspace(str(workspaces[0].get("id", "")))
+
+    results: list[dict] = []
+    counters = {"scheduled": 0, "db_only": 0, "skipped": 0, "errors": 0}
+    next_time = start_dt_utc.astimezone(timezone.utc)
+
+    n = len(carousel_ids)
+    for i, carousel_id in enumerate(carousel_ids):
+        if progress_callback:
+            progress_callback(
+                f"Karuzela {i+1}/{n}...",
+                0.05 + 0.9 * (i / max(n, 1)),
+            )
+
+        carousel = get_carousel(carousel_id)
+        if not carousel:
+            counters["errors"] += 1
+            results.append({"id": carousel_id, "status": "not_found"})
+            continue
+
+        # Skip karuzel ktore juz poszly
+        cur_status = (carousel.get("status") or "").lower()
+        if cur_status in ("posted", "published", "failed"):
+            counters["skipped"] += 1
+            results.append({"id": carousel_id, "status": f"skipped_{cur_status}"})
+            continue
+
+        scheduled_iso = next_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Step 1: jezeli juz w Publerze - delete stary post
+        old_post_id = (carousel.get("publer_post_id") or "").strip()
+        deleted_old = False
+        if old_post_id and use_publer and client is not None:
+            try:
+                client.delete_post(old_post_id)
+                deleted_old = True
+            except PublerError:
+                # Stary post moze byc juz opublikowany albo zniknal — kontynuuj
+                pass
+
+        # Step 2: schedule nowego (jezeli mozemy)
+        if use_publer and client is not None:
+            try:
+                slides = carousel.get("slides") or []
+                image_paths = [s["image_path"] for s in slides if s.get("image_path")]
+                if not image_paths:
+                    counters["skipped"] += 1
+                    results.append({"id": carousel_id, "status": "no_images"})
+                    continue
+
+                media_ids: list[str] = []
+                for path in image_paths:
+                    mid = client.upload_media(path)
+                    media_ids.append(mid)
+
+                publer_result = client.schedule_carousel(
+                    ig_account_ids=ig_account_ids,
+                    tt_account_ids=tt_account_ids,
+                    caption=carousel.get("caption", ""),
+                    hashtags=carousel.get("hashtags") or [],
+                    media_ids=media_ids,
+                    scheduled_at=scheduled_iso,
+                    verify=False,  # nie czekamy na potwierdzenie - bulk = szybkosc nad pewnoscia
+                )
+
+                new_post_id = (
+                    publer_result.get("post_id")
+                    or publer_result.get("job_id")
+                    or "ok"
+                )
+                update_carousel(
+                    carousel_id,
+                    status="scheduled",
+                    scheduled_at=scheduled_iso,
+                    publer_post_id=str(new_post_id),
+                )
+                counters["scheduled"] += 1
+                results.append({
+                    "id": carousel_id,
+                    "status": "scheduled",
+                    "new_time": scheduled_iso,
+                    "new_post_id": str(new_post_id),
+                    "deleted_old": deleted_old,
+                })
+            except Exception as e:
+                # Nie udalo sie schedulowac w Publerze — zostaw w bazie z nowym czasem ale jako draft
+                update_carousel(
+                    carousel_id,
+                    status="draft",
+                    scheduled_at=scheduled_iso,
+                    publer_post_id="",
+                )
+                counters["errors"] += 1
+                results.append({
+                    "id": carousel_id,
+                    "status": "publer_error",
+                    "new_time": scheduled_iso,
+                    "error": str(e)[:200],
+                })
+        else:
+            # Bez Publera — tylko update DB
+            update_carousel(
+                carousel_id,
+                scheduled_at=scheduled_iso,
+            )
+            counters["db_only"] += 1
+            results.append({
+                "id": carousel_id,
+                "status": "db_only",
+                "new_time": scheduled_iso,
+            })
+
+        # Step 3: oblicz czas dla nastepnej
+        gap = random.uniform(gap_minutes_min, gap_minutes_max)
+        jitter = random.uniform(-jitter_minutes, jitter_minutes)
+        next_time = next_time + timedelta(minutes=gap + jitter)
+
+    if progress_callback:
+        progress_callback("Gotowe!", 1.0)
+
+    return {
+        "total": n,
+        **counters,
+        "results": results,
+    }
