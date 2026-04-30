@@ -949,37 +949,50 @@ def show_publer_section(carousel: dict, key_suffix: str = "gen"):
             else:
                 st.caption("Brak kont TikTok w Publer")
 
-        # ── Data i godzina ────────────────────────────────────────────────
+        # ── Data i godzina (czas polski Europe/Warsaw, konwertujemy na UTC do Publera) ──
         st.markdown('<div style="margin-top:0.5rem;"></div>', unsafe_allow_html=True)
+        try:
+            from zoneinfo import ZoneInfo
+            warsaw_tz = ZoneInfo("Europe/Warsaw")
+        except Exception:
+            warsaw_tz = timezone(timedelta(hours=2))  # fallback CEST
+
+        now_warsaw = datetime.now(warsaw_tz)
+        # Default: TERAZ + 5 min (Publer wymaga min lead time, +5min jest minimum dla "wyslij teraz")
+        default_dt = now_warsaw + timedelta(minutes=5)
+
         col_d, col_t = st.columns(2)
-        now_local = datetime.now()
-        default_dt = now_local + timedelta(hours=2)
         with col_d:
             sched_date = st.date_input(
-                "Data publikacji",
+                "Data publikacji (czas polski)",
                 value=default_dt.date(),
-                min_value=now_local.date(),
+                min_value=now_warsaw.date(),
                 key=f"pub_date_{kpref}",
             )
         with col_t:
             sched_time = st.time_input(
-                "Godzina",
+                "Godzina (czas polski)",
                 value=default_dt.replace(second=0, microsecond=0).time(),
-                step=300,
+                step=60,  # co 1 min — precyzyjna kontrola
                 key=f"pub_time_{kpref}",
             )
 
-        scheduled_dt = datetime.combine(sched_date, sched_time)
-        scheduled_iso = scheduled_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Wprowadzony czas to zawsze czas polski → konwertuj na UTC dla Publera
+        scheduled_local = datetime.combine(sched_date, sched_time).replace(tzinfo=warsaw_tz)
+        scheduled_utc = scheduled_local.astimezone(timezone.utc)
+        scheduled_iso = scheduled_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        st.caption(f"Zaplanowano na: **{scheduled_dt.strftime('%d.%m.%Y o %H:%M')}** (czas lokalny)")
+        st.caption(
+            f"Zaplanowano na: **{scheduled_local.strftime('%d.%m.%Y o %H:%M')}** (czas polski) "
+            f"= {scheduled_utc.strftime('%H:%M')} UTC"
+        )
 
-        # Lead time check — Publer w praktyce potrzebuje 5+ min zeby przetworzyc
-        lead_minutes = (scheduled_dt - datetime.now()).total_seconds() / 60
-        if lead_minutes < 5:
+        # Lead time check — Publer w praktyce potrzebuje ~5 min zeby przetworzyc
+        lead_minutes = (scheduled_local - now_warsaw).total_seconds() / 60
+        if lead_minutes < 4:
             st.warning(
                 f"⚠️ Zaplanowano za **{int(lead_minutes)} min** — Publer może to odrzucić. "
-                "Daj minimum **5–10 minut** zapasu, żeby kolejka API zdążyła przetworzyć post."
+                "Daj minimum **5 minut** zapasu, żeby kolejka API zdążyła przetworzyć post."
             )
 
         # ── Wyślij ────────────────────────────────────────────────────────
@@ -1002,12 +1015,13 @@ def show_publer_section(carousel: dict, key_suffix: str = "gen"):
             # Już zaplanowane — blok "Wyślij ponownie" + opcje reschedule/anuluj
             existing_sched = carousel.get("scheduled_at", "")
             try:
+                # scheduled_at w bazie jest w UTC — konwertuj na czas polski do wyswietlenia
                 existing_sched_local = datetime.fromisoformat(existing_sched.replace("Z", "+00:00")) \
-                    .astimezone().strftime("%d.%m.%Y o %H:%M")
+                    .astimezone(warsaw_tz).strftime("%d.%m.%Y o %H:%M")
             except Exception:
                 existing_sched_local = existing_sched
             st.success(
-                f"✅ **Już zaplanowane w Publerze** na **{existing_sched_local}** "
+                f"✅ **Już zaplanowane w Publerze** na **{existing_sched_local}** (czas polski) "
                 f"(post id: `{existing_post_id}`).\n\n"
                 f"Aby zmienic czas — uzyj guzikow ponizej (skasuje stary post zeby uniknac duplikatu)."
             )
