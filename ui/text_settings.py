@@ -250,7 +250,30 @@ def render_text_settings_panel(brand_id: str, brief: dict,
                 help=(
                     "Po wygenerowaniu obrazu analizuje tlo i dodaje subtelny gradient pod "
                     "tekstem GDY tlo jest jasne lub niespokojne. Plus: gdy pozycja=auto, "
-                    "wybiera najmniej zatluszczona strefe na bazie edge density."
+                    "wybiera najmniej zatluszczona strefe na bazie edge density. "
+                    "Z mocnym stroke (3+) overlay sie nie nakłada."
+                ),
+            )
+
+            # ─── Look & feel naturalny vs reklamowy ───
+            st.markdown("**Look naturalny (mniej 'reklamy', bardziej 'ludzki')**")
+            flat_text_style = st.checkbox(
+                "Plaski styl: naglowek tym samym fontem/rozmiarem co body",
+                value=bool(current.get("flat_text_style", False)),
+                key=f"{key_prefix}_flat",
+                help=(
+                    "Eliminuje wielki bold headline kontra male body — wszystko jednolite. "
+                    "Tekst wyglada jak pisany przez czlowieka, nie jak reklama. "
+                    "Naglowek dziedziczy rozmiar i font z body."
+                ),
+            )
+            hide_headline_first_two = st.checkbox(
+                "Ukryj naglowek na slajdach 1 i 2",
+                value=bool(current.get("hide_headline_first_two", False)),
+                key=f"{key_prefix}_hide_head_12",
+                help=(
+                    "Slajdy 1 i 2 maja tylko body bez wielkiego naglowka. "
+                    "Daje 'organic post' feel — od razu wchodzisz w tresc bez bannera-naglowka."
                 ),
             )
 
@@ -260,6 +283,8 @@ def render_text_settings_panel(brand_id: str, brief: dict,
             "headline_size_rest": int(headline_size_rest),
             "body_size": int(body_size),
             "body_same_as_headline": bool(body_same_as_headline),
+            "flat_text_style": bool(flat_text_style),
+            "hide_headline_first_two": bool(hide_headline_first_two),
             "font_key": font_key,
             "text_color": text_color,
             "stroke_color": stroke_color,

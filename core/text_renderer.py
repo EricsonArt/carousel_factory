@@ -41,6 +41,8 @@ DEFAULT_TEXT_SETTINGS: dict = {
     "headline_size_rest": 70,
     "body_size": 36,
     "body_same_as_headline": False,
+    "flat_text_style": False,            # NOWE: headline = ten sam font/rozmiar co body (naturalny look)
+    "hide_headline_first_two": False,    # NOWE: slajdy 1 i 2 bez naglowka, tylko body
     "font_key": "montserrat_black",
     "text_color": "#FFFFFF",
     "stroke_color": "#000000",
@@ -194,12 +196,13 @@ def _region_busyness_simple(img: Image.Image, top: int, bottom: int) -> float:
 
 
 def adaptive_overlay(img: Image.Image, y_top: int, y_bottom: int,
-                      text_color_hex: str) -> Image.Image:
+                      text_color_hex: str, has_strong_stroke: bool = False) -> Image.Image:
     """
-    Dodaje subtelny gradient za tekstem GDY:
-      - tekst jasny i tlo jasne (kontrast slaby), lub
-      - tlo niespokojne (std-dev > 50)
-    Gradient: smooth fade z czarnego (alpha 0.0 → 0.55 → 0.0) po Y, tylko w obszarze tekstu.
+    Dodaje BARDZO SUBTELNY gradient za tekstem TYLKO gdy:
+      - tekst nie ma mocnego obrysu (has_strong_stroke=False)
+      - tlo wyraznie kontrastuje slabo z tekstem (high luma diff vs ekstremalna)
+      - lub tlo bardzo niespokojne (std-dev > 75)
+    Gradient: smooth fade, peak alpha tylko 60/255 (24%) — nie zaslania tla.
     """
     H = img.height
     y_top = max(0, y_top)
@@ -207,17 +210,21 @@ def adaptive_overlay(img: Image.Image, y_top: int, y_bottom: int,
     if y_bottom - y_top < 20:
         return img
 
+    # Jezeli mamy mocny stroke (3+), tekst sam jest czytelny — zaden overlay nie potrzebny
+    if has_strong_stroke:
+        return img
+
     text_is_light = _is_color_light(text_color_hex)
     bg_brightness = _region_brightness(img, y_top, y_bottom)
     bg_busyness = _region_busyness_simple(img, y_top, y_bottom)
 
-    # Decyzja: nakladamy overlay?
+    # Zmiekczone progi: overlay tylko gdy naprawde trzeba
     needs_overlay = False
-    if text_is_light and bg_brightness > 140:
+    if text_is_light and bg_brightness > 180:  # bylo 140 — teraz tylko bardzo jasne tla
         needs_overlay = True
-    if not text_is_light and bg_brightness < 110:
+    if not text_is_light and bg_brightness < 70:  # bylo 110 — teraz tylko bardzo ciemne tla
         needs_overlay = True
-    if bg_busyness > 55:
+    if bg_busyness > 75:  # bylo 55 — teraz tylko bardzo niespokojne tla
         needs_overlay = True
 
     if not needs_overlay:
@@ -225,14 +232,13 @@ def adaptive_overlay(img: Image.Image, y_top: int, y_bottom: int,
 
     # Buduj gradient layer (RGBA), full image rozmiar, alpha = 0 wszedzie poza strefa tekstu
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    overlay_color = (0, 0, 0, 0) if text_is_light else (255, 255, 255, 0)
     base_rgb = (0, 0, 0) if text_is_light else (255, 255, 255)
 
     # Padding gradientu - smooth fade in/out
     pad = 80
     region_top = max(0, y_top - pad)
     region_bottom = min(H, y_bottom + pad)
-    peak_alpha = 140  # max alpha (out of 255)
+    peak_alpha = 60  # bylo 140 — znacznie subtelniejsze (24% nieprzezroczystosci)
 
     pixels = overlay.load()
     width = img.width
@@ -301,6 +307,11 @@ def apply_text_to_image(
     """
     s = merge_text_settings(text_settings)
 
+    # OPCJA: ukryj naglowek na slajdach 1-2 (slide_index 0 i 1).
+    # Headline znika; body zostaje normalnie, daje "ludzki" feel zamiast "reklamy".
+    if s.get("hide_headline_first_two") and slide_index < 2:
+        headline = ""
+
     if not headline and not body:
         return img
 
@@ -319,6 +330,13 @@ def apply_text_to_image(
 
     head_font_path = _resolve_font_path(s["font_key"], "headline")
     body_font_path = _resolve_font_path(s["font_key"], "body")
+
+    # OPCJA: flat_text_style — naglowek dostaje TEN SAM rozmiar i font co body.
+    # Eliminuje "wielki bold headline + maly body" reklame-look,
+    # daje jednolity "ludzki" tekst.
+    if s.get("flat_text_style"):
+        head_target_size = body_target_size
+        head_font_path = body_font_path
 
     W, H = img.size
 
@@ -380,9 +398,14 @@ def apply_text_to_image(
     # Hard clamp
     y_start = max(safe_top, min(y_start, H - safe_bottom - total_h))
 
-    # ADAPTIVE OVERLAY — subtelny gradient pod tekstem dla czytelnosci
+    # ADAPTIVE OVERLAY — subtelny gradient pod tekstem dla czytelnosci.
+    # Przy mocnym stroke (3+ pikseli) tekst sam jest czytelny — gradient nie potrzebny.
     if s["smart_fitting"]:
-        img = adaptive_overlay(img, y_start - 20, y_start + total_h + 20, s["text_color"])
+        has_strong_stroke = int(s.get("stroke_width", 0)) >= 3
+        img = adaptive_overlay(
+            img, y_start - 20, y_start + total_h + 20, s["text_color"],
+            has_strong_stroke=has_strong_stroke,
+        )
 
     draw = ImageDraw.Draw(img)
     text_color = s["text_color"]
