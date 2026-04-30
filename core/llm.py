@@ -206,20 +206,44 @@ def _image_to_block(img) -> Optional[dict]:
         if not path.exists():
             return None
         data = path.read_bytes()
-        media_type = _guess_media_type(path.suffix)
+        # Krzyzuj: detekcja po magic bytes (pewniejsze niz extension)
+        # i fallback do extension jak nie rozpoznane
+        media_type = _detect_media_type_from_bytes(data) or _guess_media_type(path.suffix)
         b64 = base64.standard_b64encode(data).decode("ascii")
         return {
             "type": "image",
             "source": {"type": "base64", "media_type": media_type, "data": b64},
         }
     elif isinstance(img, bytes):
+        # KRYTYCZNE: musimy wykryc media_type z magic bytes — Claude API odrzuca
+        # mismatch (np. JPEG bytes deklarowane jako image/png → 400 invalid_request_error).
+        # TikWM zwraca JPEG, Apify czesto WebP, IG czasem PNG — nie mozemy hardkodowac.
+        media_type = _detect_media_type_from_bytes(img) or "image/jpeg"
         b64 = base64.standard_b64encode(img).decode("ascii")
         return {
             "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": b64},
+            "source": {"type": "base64", "media_type": media_type, "data": b64},
         }
     elif isinstance(img, dict):
         return img  # zaufaj ze user juz zbudowal block
+    return None
+
+
+def _detect_media_type_from_bytes(data: bytes) -> Optional[str]:
+    """
+    Wykrywa format obrazu z pierwszych bajtow pliku (magic bytes).
+    Zwraca image/jpeg | image/png | image/webp | image/gif lub None gdy nieznany.
+    """
+    if not data or len(data) < 12:
+        return None
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
     return None
 
 
