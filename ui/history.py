@@ -1,11 +1,18 @@
 """
 Historia wygenerowanych karuzel dla aktywnej marki.
 """
+import threading
+import time
+import traceback
+import uuid
 from pathlib import Path
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-from core.carousel_generator import export_carousel_as_zip
+from core.carousel_generator import (
+    export_carousel_as_zip, repair_carousel_backgrounds, get_broken_slide_indices,
+)
 from db import list_carousels, get_carousel
 from ui.theme import page_header, section_title, empty_state
 from ui.generate import show_publer_section
@@ -17,6 +24,58 @@ _STATUS_COLORS = {
     "posted":    ("#D1FAE5", "#059669"),
     "failed":    ("#FEF2F2", "#DC2626"),
 }
+
+
+# ─────────────────────────────────────────────────────────────
+# REPAIR JOBS — regeneracja brakujacych tla AI w tle
+# ─────────────────────────────────────────────────────────────
+
+def _get_repair_jobs() -> dict:
+    return st.session_state.setdefault("repair_jobs", {})
+
+
+def _start_repair_job(carousel_id: str) -> str:
+    jobs = _get_repair_jobs()
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {
+        "id": job_id,
+        "carousel_id": carousel_id,
+        "status": "running",
+        "stage": "Inicjalizacja...",
+        "progress": 0.0,
+        "started_at": time.time(),
+        "finished_at": None,
+        "result": None,
+        "error": None,
+    }
+
+    def _runner(jobs, job_id, carousel_id):
+        def cb(stage, pct):
+            if job_id in jobs:
+                jobs[job_id]["stage"] = stage
+                jobs[job_id]["progress"] = float(pct)
+        try:
+            result = repair_carousel_backgrounds(
+                carousel_id,
+                prefer_provider="gemini",
+                model_override="gemini-3-pro-image-preview",
+                progress_callback=cb,
+            )
+            jobs[job_id]["result"] = result
+            jobs[job_id]["status"] = "done"
+            jobs[job_id]["stage"] = "Gotowe"
+            jobs[job_id]["progress"] = 1.0
+        except Exception as e:
+            jobs[job_id]["status"] = "error"
+            jobs[job_id]["error"] = str(e)
+            jobs[job_id]["traceback"] = traceback.format_exc()
+        finally:
+            jobs[job_id]["finished_at"] = time.time()
+
+    thread = threading.Thread(target=_runner, args=(jobs, job_id, carousel_id), daemon=True)
+    add_script_run_ctx(thread)
+    thread.start()
+    return job_id
 
 
 def render_history(brand_id: str):
@@ -145,7 +204,71 @@ def render_history(brand_id: str):
                 except Exception as e:
                     st.error(f"Błąd ZIP: {str(e)[:80]}")
 
+            # ── Repair backgrounds (Gemini fallback recovery) ─────────────────
+            full_carousel = get_carousel(c["id"]) or c
+            broken_idx = get_broken_slide_indices(full_carousel)
+            n_broken = len(broken_idx)
+            n_total = len(full_carousel.get("slides") or [])
+
+            if n_broken > 0:
+                st.markdown('<div style="margin-top:1rem;"></div>', unsafe_allow_html=True)
+                st.markdown(
+                    f"""<div style="background:#FFF7ED;border:1px solid #FB923C;border-radius:12px;
+                        padding:0.85rem 1.1rem;margin-bottom:0.5rem;">
+                        <div style="font-weight:700;color:#9A3412;font-size:0.92rem;">
+                            ⚠️ Brakujace tla AI: {n_broken}/{n_total} slajdow
+                        </div>
+                        <div style="color:#7C2D12;font-size:0.8rem;margin-top:0.3rem;line-height:1.45;">
+                            Te slajdy maja zastepcze tlo (Gemini quota lub blad podczas generacji).
+                            Kliknij ponizej zeby je zregenerowac — tekst zostaje 1:1, tylko obrazy beda nowe.
+                            Wymaga aktywnych kluczy Gemini w Secrets.
+                        </div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+
+                # Status job-a naprawy dla TEJ karuzeli
+                rjobs = _get_repair_jobs()
+                my_rjobs = [j for j in rjobs.values() if j["carousel_id"] == c["id"]]
+                active_rjob = next((j for j in my_rjobs if j["status"] == "running"), None)
+
+                if active_rjob:
+                    st.info(f"🔧 Naprawiam... {int(active_rjob['progress']*100)}% — {active_rjob['stage']}")
+                    st.progress(max(0.05, min(1.0, active_rjob["progress"])))
+                else:
+                    if st.button(
+                        f"🔧 Wygeneruj brakujace tla AI ({n_broken} slajdow)",
+                        key=f"repair_{c['id']}",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        rjob_id = _start_repair_job(c["id"])
+                        st.success(f"Job naprawczy ruszyl (`{rjob_id}`). Postep widoczny tutaj.")
+                        st.rerun()
+
+                # Pokaz wynik ostatniego repair job-a
+                done_jobs = [j for j in my_rjobs if j["status"] == "done"]
+                if done_jobs:
+                    latest = max(done_jobs, key=lambda j: j["finished_at"] or 0)
+                    res = latest.get("result") or {}
+                    if res.get("repaired", 0) > 0:
+                        st.success(
+                            f"✅ Wygenerowano AI tla dla {res['repaired']}/{res['repaired'] + res['failed']} slajdow."
+                        )
+                    if res.get("failed", 0) > 0:
+                        st.warning(
+                            f"⚠️ {res['failed']} slajdow dalej ma fallback (Gemini quota wciaz wyczerpane). "
+                            f"Sprobuj ponownie pozniej."
+                        )
+                    with st.expander("Szczegoly naprawy"):
+                        for d in (res.get("details") or []):
+                            st.text(d)
+
+                err_jobs = [j for j in my_rjobs if j["status"] == "error"]
+                if err_jobs:
+                    latest_err = max(err_jobs, key=lambda j: j["finished_at"] or 0)
+                    st.error(f"❌ Blad naprawy: {latest_err.get('error', '?')}")
+
             # Publer auto-publish section — same widget as in Generator
             st.markdown('<div style="margin-top:1rem;"></div>', unsafe_allow_html=True)
-            full_carousel = get_carousel(c["id"]) or c
             show_publer_section(full_carousel, key_suffix="hist")

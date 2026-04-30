@@ -532,3 +532,118 @@ def export_carousel_as_zip(carousel_id: str) -> Path:
             zf.write(caption_path, "caption.txt")
 
     return zip_path
+
+
+# ─────────────────────────────────────────────────────────────
+# REPAIR — regeneruje brakujace tla AI dla istniejacych karuzel
+# ─────────────────────────────────────────────────────────────
+
+# Provider'y oznaczajace ze tlo NIE bylo wygenerowane przez AI
+_BROKEN_PROVIDERS = {"fallback_quota", "fallback_error", "error"}
+
+
+def get_broken_slide_indices(carousel: dict) -> list[int]:
+    """Zwraca indeksy slajdow ktore maja zastepcze tlo (Gemini quota / error)."""
+    broken = []
+    for i, slide in enumerate(carousel.get("slides") or []):
+        provider = (slide.get("image_provider") or "").lower()
+        if any(provider.startswith(p) for p in _BROKEN_PROVIDERS):
+            broken.append(i)
+    return broken
+
+
+def repair_carousel_backgrounds(
+    carousel_id: str,
+    prefer_provider: str = "gemini",
+    model_override: Optional[str] = "gemini-3-pro-image-preview",
+    image_quality: str = "low",
+    progress_callback=None,
+) -> dict:
+    """
+    Regeneruje TYLKO te slajdy ktorych image_provider wskazuje na fallback (quota / error).
+    Tekst (headline, body) zostaje 1:1 — nie wywolujemy Claude do copy.
+
+    Zwraca: {"repaired": int, "failed": int, "skipped": int, "details": list}
+    """
+    from db import get_carousel as _get
+    carousel = _get(carousel_id)
+    if not carousel:
+        raise ValueError(f"Carousel {carousel_id} nie istnieje")
+
+    brief = get_brief(carousel.get("brand_id", "")) or {}
+    style = get_style(carousel.get("style_id")) if carousel.get("style_id") else None
+    text_settings = merge_text_settings(brief.get("text_settings"))
+
+    slides = list(carousel.get("slides") or [])
+    broken_idx = get_broken_slide_indices({"slides": slides})
+
+    if not broken_idx:
+        return {"repaired": 0, "failed": 0, "skipped": len(slides),
+                "details": ["Brak slajdow do naprawy — wszystkie maja AI tlo."]}
+
+    carousel_dir = CAROUSELS_DIR / carousel["brand_id"] / carousel_id
+    ensure_dir(carousel_dir)
+
+    repaired = 0
+    failed = 0
+    details: list[str] = []
+
+    for k, i in enumerate(broken_idx):
+        if progress_callback:
+            progress_callback(
+                f"Regeneruje slajd {i+1} (broken {k+1}/{len(broken_idx)})...",
+                0.05 + 0.9 * (k / len(broken_idx)),
+            )
+
+        slide = slides[i]
+        # Reuse istniejaca sciezke (zachowuje filename + nazwe headlinem)
+        slide_path_str = slide.get("image_path", "")
+        if slide_path_str:
+            slide_path = Path(slide_path_str)
+        else:
+            slide_path = carousel_dir / f"{i+1:02d}_{sanitize_filename(slide.get('headline', 'slide'))}.jpg"
+
+        try:
+            new_meta = render_slide_image(
+                slide, style, slide_path,
+                use_ai_images=True,
+                prefer_provider=prefer_provider,
+                image_quality=image_quality,
+                model_override=model_override,
+                text_mode="overlay",
+                slide_index=i,
+                text_settings=text_settings,
+            )
+            # Sprawdz czy faktycznie udalo sie wygenerowac AI tlo (a nie kolejny fallback)
+            new_provider = (new_meta.get("image_provider") or "").lower()
+            if any(new_provider.startswith(p) for p in _BROKEN_PROVIDERS):
+                # Ciagle fallback — Gemini wciaz ma quota issues
+                failed += 1
+                details.append(f"Slajd {i+1}: dalej fallback ({new_provider})")
+                # Update mimo to — moze sciezka sie zmienila
+                slides[i]["image_path"] = new_meta["image_path"]
+                slides[i]["image_provider"] = new_meta["image_provider"]
+                slides[i]["image_model"] = new_meta["image_model"]
+            else:
+                repaired += 1
+                details.append(f"Slajd {i+1}: OK ({new_provider})")
+                slides[i]["image_path"] = new_meta["image_path"]
+                slides[i]["image_provider"] = new_meta["image_provider"]
+                slides[i]["image_model"] = new_meta["image_model"]
+
+        except Exception as e:
+            failed += 1
+            details.append(f"Slajd {i+1}: blad — {str(e)[:100]}")
+
+    # Update DB jednym zapisem
+    update_carousel(carousel_id, slides=slides)
+
+    if progress_callback:
+        progress_callback("Gotowe!", 1.0)
+
+    return {
+        "repaired": repaired,
+        "failed": failed,
+        "skipped": len(slides) - len(broken_idx),
+        "details": details,
+    }
