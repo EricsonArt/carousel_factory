@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import (
-    OPENAI_API_KEY, GEMINI_API_KEY, REPLICATE_API_TOKEN,
+    OPENAI_API_KEY, GEMINI_API_KEY, GEMINI_API_KEYS, REPLICATE_API_TOKEN,
     IMAGE_MODELS, SLIDE_WIDTH, SLIDE_HEIGHT,
     DAILY_COST_CAP_USD, IMAGE_QUALITY,
 )
@@ -37,11 +37,13 @@ class ImageGenerationError(Exception):
     pass
 
 
-# Rate limiter dla Gemini — free tier to 15 RPM, dajemy 4.5s odstep zeby miec margines
-# Wspoldzielony miedzy watkami (automat moze generowac wiele karuzel rownolegle)
-_gemini_rate_lock = threading.Lock()
-_gemini_last_call_at = 0.0
+# Rate limiter dla Gemini per-klucz — free tier 15 RPM, dajemy 4.5s odstep
+# Wspoldzielony miedzy watkami (automat moze generowac rownolegle)
 _GEMINI_MIN_INTERVAL_SEC = 4.5
+_gemini_state_lock = threading.Lock()
+_gemini_last_call_at: dict[str, float] = {}  # key_prefix -> timestamp
+_gemini_dead_keys: set[str] = set()           # klucze ktore zwrocily daily quota / billing
+_gemini_round_robin_idx = 0                    # licznik rotacji
 
 
 def generate_image(
@@ -132,7 +134,8 @@ def _is_provider_available(provider: str) -> bool:
     if provider == "openai":
         return bool(OPENAI_API_KEY)
     if provider == "gemini":
-        return bool(GEMINI_API_KEY)
+        # Dostepny gdy mamy chociaz jeden zywy klucz (nie wykluczony)
+        return bool(_alive_gemini_keys())
     if provider == "replicate":
         return bool(REPLICATE_API_TOKEN)
     return False
@@ -280,25 +283,63 @@ def _to_file_object(ref):
 # GEMINI - Phase 3 stub
 # ─────────────────────────────────────────────────────────────
 
-def _gemini_rate_limit_wait():
-    """Wymusza min. interwal miedzy callami Gemini (free tier: 15 RPM)."""
+def _key_id(key: str) -> str:
+    """Krotki identyfikator klucza do logow (NIE caly klucz)."""
+    if not key:
+        return "?"
+    return f"{key[:6]}…{key[-3:]}"
+
+
+def _alive_gemini_keys() -> list[str]:
+    """Zwraca klucze nie oznaczone jako 'dead' (daily quota wyczerpany)."""
+    with _gemini_state_lock:
+        return [k for k in GEMINI_API_KEYS if k not in _gemini_dead_keys]
+
+
+def _next_gemini_key() -> Optional[str]:
+    """Round-robin po zywych kluczach z respektowaniem rate-limitu per-klucz."""
+    global _gemini_round_robin_idx
+    alive = _alive_gemini_keys()
+    if not alive:
+        return None
+
+    # Wybierz klucz ktory najdluzej nie byl uzyty (zeby rownolegle rozkladac obciazenie)
+    with _gemini_state_lock:
+        oldest = min(alive, key=lambda k: _gemini_last_call_at.get(k, 0.0))
+        return oldest
+
+
+def _gemini_wait_for_key(key: str):
+    """Sleep az klucz bedzie gotowy (4.5s od ostatniego uzycia)."""
     global _gemini_last_call_at
-    with _gemini_rate_lock:
-        now = time.time()
-        elapsed = now - _gemini_last_call_at
+    with _gemini_state_lock:
+        last = _gemini_last_call_at.get(key, 0.0)
+        elapsed = time.time() - last
         if elapsed < _GEMINI_MIN_INTERVAL_SEC:
             sleep_for = _GEMINI_MIN_INTERVAL_SEC - elapsed
-            time.sleep(sleep_for)
-        _gemini_last_call_at = time.time()
+        else:
+            sleep_for = 0
+    if sleep_for > 0:
+        time.sleep(sleep_for)
+    with _gemini_state_lock:
+        _gemini_last_call_at[key] = time.time()
+
+
+def _mark_gemini_dead(key: str, reason: str):
+    """Oznacza klucz jako wyczerpany — nie probujemy go juz w tej sesji."""
+    with _gemini_state_lock:
+        _gemini_dead_keys.add(key)
 
 
 def _call_gemini(model_id: str, prompt: str, refs: Optional[list], size: tuple) -> bytes:
     """
-    Gemini image generation. Z built-in rate limiterem (4.5s/req) i retry na 429.
-    Free tier: 15 RPM. Wymaga GEMINI_API_KEY w Streamlit Secrets.
+    Gemini image generation z PULA kluczy.
+    - Per-klucz rate limit (4.5s = ~13 RPM, pod 15 free tier)
+    - Auto-rotacja: gdy klucz padnie na 429 → sprobuj kolejnym
+    - Daily quota klucza → mark jako dead, nie wracamy
     """
-    if not GEMINI_API_KEY:
-        raise QuotaExhausted("Brak GEMINI_API_KEY — dodaj do Streamlit Secrets.")
+    if not GEMINI_API_KEYS:
+        raise QuotaExhausted("Brak kluczy GEMINI — dodaj GEMINI_API_KEY (lub _1, _2...) do Secrets.")
 
     try:
         from google import genai
@@ -306,9 +347,6 @@ def _call_gemini(model_id: str, prompt: str, refs: Optional[list], size: tuple) 
     except ImportError:
         raise ImageGenerationError("Brak pakietu google-genai. pip install google-genai")
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
-
-    # Zbuduj prompt ze stylowymi wskazówkami
     parts = []
     if refs:
         for r in refs[:3]:
@@ -318,55 +356,85 @@ def _call_gemini(model_id: str, prompt: str, refs: Optional[list], size: tuple) 
                 pass
     parts.append(types.Part.from_text(text=prompt))
 
-    last_error = None
-    for attempt in range(4):  # 1 proba + 3 retry
-        # Rate limit przed kazda proba
-        _gemini_rate_limit_wait()
+    keys_tried_this_request: list[str] = []
+    last_error: Optional[Exception] = None
 
-        try:
-            resp = client.models.generate_content(
-                model=model_id,
-                contents=parts,
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE", "TEXT"],
-                ),
-            )
-            # Sukces — wyciagnij obraz
-            for candidate in resp.candidates:
-                for part in candidate.content.parts:
-                    if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
-                        return part.inline_data.data
-            # Brak obrazu w odpowiedzi — sprobuj jeszcze raz
-            last_error = ImageGenerationError("Gemini zwrocil odpowiedz bez obrazu")
-            time.sleep(2)
-            continue
+    # Petla rotacji: probujemy kolejne klucze az ktorys zadziala
+    while True:
+        key = _next_gemini_key()
+        if not key or key in keys_tried_this_request:
+            # Wszystkie zywe klucze sprobowane → koniec
+            break
+        keys_tried_this_request.append(key)
 
-        except Exception as e:
-            msg = str(e).lower()
-            last_error = e
-
-            # 429 / rate limit → backoff i retry
-            if "429" in msg or "rate" in msg or "resource_exhausted" in msg or "too many" in msg:
-                if attempt < 3:
-                    backoff = 10 * (attempt + 1)  # 10, 20, 30 sek
-                    time.sleep(backoff)
-                    continue
-                # Wyczerpane proby — to RPM limit, traktujemy jako transient
-                raise QuotaExhausted(
-                    f"Gemini rate limit po {attempt+1} probach: {e}"
+        # Per-klucz: max 3 proby z backoffem na rate limit (transient)
+        for attempt in range(3):
+            _gemini_wait_for_key(key)
+            try:
+                client = genai.Client(api_key=key)
+                resp = client.models.generate_content(
+                    model=model_id,
+                    contents=parts,
+                    config=types.GenerateContentConfig(
+                        response_modalities=["IMAGE", "TEXT"],
+                    ),
                 )
-
-            # Daily quota / billing → final
-            if "quota" in msg or "daily" in msg or "billing" in msg:
-                raise QuotaExhausted(f"Gemini daily quota: {e}")
-
-            # Inny blad — spróbuj raz jeszcze, potem propaguj
-            if attempt < 1:
-                time.sleep(3)
+                for candidate in resp.candidates:
+                    for part in candidate.content.parts:
+                        if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
+                            return part.inline_data.data
+                # Brak obrazu — to dziwne, traktujemy jako transient
+                last_error = ImageGenerationError("Gemini zwrocil odpowiedz bez obrazu")
+                time.sleep(2)
                 continue
-            raise ImageGenerationError(f"Gemini error: {e}")
 
-    raise ImageGenerationError(f"Gemini nie zwrocil obrazu po 4 probach: {last_error}")
+            except Exception as e:
+                msg = str(e).lower()
+                last_error = e
+
+                # Daily quota / billing wyczerpane → klucz jest martwy, przeskocz na kolejny
+                is_daily = (
+                    ("quota" in msg and "daily" in msg)
+                    or "billing" in msg
+                    or "permission" in msg
+                    or "api key not valid" in msg
+                    or "invalid" in msg and "key" in msg
+                )
+                if is_daily:
+                    _mark_gemini_dead(key, str(e)[:80])
+                    break  # break z attempt loop → bierzemy kolejny klucz
+
+                # 429 / rate limit / resource_exhausted → backoff
+                is_rate = (
+                    "429" in msg or "rate" in msg
+                    or "resource_exhausted" in msg or "too many" in msg
+                )
+                if is_rate:
+                    if attempt < 2:
+                        time.sleep(8 * (attempt + 1))  # 8, 16 sek
+                        continue
+                    # Po 3 probach na tym kluczu — moze tu jest dzienny limit ukryty pod 429.
+                    # Mark jako dead i probuj kolejnego klucza
+                    _mark_gemini_dead(key, "rate limit po 3 probach")
+                    break
+
+                # Inny blad — sprobuj raz jeszcze na tym samym kluczu
+                if attempt < 1:
+                    time.sleep(3)
+                    continue
+                # Po 2 probach z innym bledem → przejdz na kolejny klucz
+                break
+
+    # Wyczerpano wszystkie zywe klucze
+    alive = _alive_gemini_keys()
+    if not alive:
+        raise QuotaExhausted(
+            f"Wszystkie {len(GEMINI_API_KEYS)} kluczy Gemini wyczerpane. "
+            f"Ostatni blad: {last_error}"
+        )
+    raise ImageGenerationError(
+        f"Gemini nie zwrocil obrazu mimo {len(keys_tried_this_request)} kluczy: {last_error}"
+    )
 
 
 def _ref_to_gemini_part(ref):

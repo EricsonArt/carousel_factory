@@ -294,13 +294,11 @@ def render_automation(brand_id: str):
             st.caption("Brak stylów — dodaj w zakładce 🎨 Style.")
 
     # Model
-    try:
-        _gemini_key = st.secrets.get("GEMINI_API_KEY", "") or ""
-    except Exception:
-        from config import GEMINI_API_KEY as _gemini_key
+    from config import GEMINI_API_KEYS as _gemini_keys
+    has_gemini = bool(_gemini_keys)
 
     available_models: dict[str, str] = {}
-    if _gemini_key:
+    if has_gemini:
         available_models["nano_banana_pro"] = _MODEL_LABELS["nano_banana_pro"]
         available_models["nano_banana_2"] = _MODEL_LABELS["nano_banana_2"]
     available_models["gradient"] = _MODEL_LABELS["gradient"]

@@ -44,8 +44,41 @@ for _d in (DATA_DIR, CAROUSELS_DIR, STYLES_DIR, SESSIONS_DIR, LOGS_DIR):
 # KLUCZE API
 # ─────────────────────────────────────────────────────────────
 OPENAI_API_KEY = _get_secret("OPENAI_API_KEY")
-GEMINI_API_KEY = _get_secret("GEMINI_API_KEY")
 ANTHROPIC_API_KEY = _get_secret("ANTHROPIC_API_KEY")
+
+
+# ─────────────────────────────────────────────────────────────
+# GEMINI — pula kluczy z auto-rotacja
+# ─────────────────────────────────────────────────────────────
+# Wspierane formaty (mozesz uzyc dowolnej kombinacji):
+#   1) Pojedynczy klucz:   GEMINI_API_KEY = "AIza..."
+#   2) Lista CSV:          GEMINI_API_KEYS = "AIza...,AIza...,AIza..."
+#   3) Numerowane:         GEMINI_API_KEY_1 = "AIza..."
+#                          GEMINI_API_KEY_2 = "AIza..."
+#                          ...
+def _collect_gemini_keys() -> list[str]:
+    keys: list[str] = []
+    primary = _get_secret("GEMINI_API_KEY", "")
+    if primary:
+        keys.append(primary.strip())
+    csv = _get_secret("GEMINI_API_KEYS", "")
+    if csv:
+        for k in csv.split(","):
+            k = k.strip()
+            if k and k not in keys:
+                keys.append(k)
+    for i in range(1, 11):  # GEMINI_API_KEY_1 .. GEMINI_API_KEY_10
+        k = _get_secret(f"GEMINI_API_KEY_{i}", "")
+        if k:
+            k = k.strip()
+            if k and k not in keys:
+                keys.append(k)
+    return keys
+
+
+GEMINI_API_KEYS: list[str] = _collect_gemini_keys()
+# Wstecznie kompatybilne — pojedynczy klucz dla starszego kodu
+GEMINI_API_KEY: str = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
 APIFY_API_TOKEN = _get_secret("APIFY_API_TOKEN")
 REPLICATE_API_TOKEN = _get_secret("REPLICATE_API_TOKEN")
 

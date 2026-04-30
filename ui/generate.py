@@ -13,7 +13,10 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from core.carousel_generator import generate_carousel, export_carousel_as_zip
 from db import get_brand, get_brief, list_styles, update_carousel
-from config import DEFAULT_SLIDES, MIN_SLIDES, MAX_SLIDES, PUBLER_API_KEY, PUBLER_WORKSPACE_ID
+from config import (
+    DEFAULT_SLIDES, MIN_SLIDES, MAX_SLIDES, PUBLER_API_KEY, PUBLER_WORKSPACE_ID,
+    OPENAI_API_KEY,
+)
 from ui.theme import page_header, section_title, empty_state
 
 
@@ -597,16 +600,21 @@ def render_generate(brand_id: str):
 
         st.markdown('<div style="margin-top:0.25rem;"></div>', unsafe_allow_html=True)
 
-        # Czytaj klucze na bieżąco (nie z cache modułu) żeby wykryć nowo dodane Secrets
-        try:
-            _GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "") or ""
-            _OAI_KEY    = st.secrets.get("OPENAI_API_KEY", "") or ""
-        except Exception:
-            from config import GEMINI_API_KEY as _GEMINI_KEY, OPENAI_API_KEY as _OAI_KEY
+        # Klucze: Gemini ma teraz POOL (auto-rotacja gdy klucz padnie)
+        from config import GEMINI_API_KEYS as _GEMINI_KEYS
+        _OAI_KEY = OPENAI_API_KEY  # zaimportowany na gorze pliku
+
+        if _GEMINI_KEYS and len(_GEMINI_KEYS) > 1:
+            from core.image_router import _alive_gemini_keys
+            alive_n = len(_alive_gemini_keys())
+            st.caption(
+                f"🔑 Gemini pool: **{alive_n}/{len(_GEMINI_KEYS)} kluczy aktywnych** "
+                f"(auto-rotacja gdy któryś wyczerpie limit)"
+            )
 
         # Kolejność: top quality AI na górze (style transfer z reference images), gradient na dole jako fallback
         _img_options: dict[str, str] = {}
-        if _GEMINI_KEY:
+        if _GEMINI_KEYS:
             _img_options["nano_banana_pro"]  = "🟢 Nano Banana Pro (Gemini 3 Pro Image)  —  TOP JAKOŚĆ, 4K, style transfer, GRATIS"
             _img_options["nano_banana_2"]    = "🟢 Nano Banana 2 (Gemini 3.1 Flash)  —  szybkie + style transfer, GRATIS"
             _img_options["nano_banana_v25"]  = "🟢 Nano Banana (Gemini 2.5 Flash Image)  —  klasyk, GRATIS"
