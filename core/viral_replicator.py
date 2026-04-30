@@ -395,11 +395,28 @@ ORIGINAL HASHTAGS:
 
 ZADANIE:
 1. Zanalizuj viralu strukture (hook, body progression, CTA, viral_drivers, tone)
-2. Zreplikuj WZORZEC dla marki usera (uzywajac jego briefa) — zachowuj DNA, nie kopiuj slow
-3. CTA na ostatnim slajdzie MUSI uzyc:
+
+2. **POLICZ DOKLADNIE SLOWA NA KAZDYM SLAJDZIE** (KRYTYCZNE dla zachowania stylu viralu):
+   - Dla kazdego slajdu zapisz w `text_density_per_slide`: liczbe slow w headline + body
+   - Niektore slajdy moga miec TYLKO obraz bez tekstu (zapisz 0)
+   - Niektore moga miec krotki hook (1-3 slowa)
+   - Inne moga miec dluzszy akapit (10-20 slow)
+
+3. Zreplikuj WZORZEC dla marki usera (uzywajac jego briefa) — zachowuj DNA, nie kopiuj slow
+
+4. **DOPASUJ DLUGOSC TEKSTU 1:1**:
+   - Dla kazdego slajdu repliki, ustaw `headline_word_target` i `body_word_target` IDENTYCZNE
+     jak na oryginalnym slajdzie (±1 slowo)
+   - Jesli oryginalny slajd 1 ma 3 slowa headline → replika ma 2-4 slowa
+   - Jesli oryginalny slajd 5 mial sam obraz bez tekstu → replika tez ma minimum tekstu (1-3 slowa hint)
+   - Jesli viral ma minimalistyczny styl (kazdy slajd <8 slow) → REPLIKA TEZ minimalistyczna,
+     NIE rozwleklaj tylko bo brand brief ma duzo USPs
+
+5. CTA na ostatnim slajdzie MUSI uzyc:
    - cta_text: "{cta_text or '(uzyj generycznego, np. Klik link w bio)'}"
    - cta_url: "{cta_url or '(brak — uzyj generycznego CTA bez linku)'}"
-4. Zaadaptuj liczbe slajdow do {images_count if is_carousel else '7-9 (poniewaz oryginal byl wideo, sam zaprojektuj)'}.
+
+6. Zaadaptuj liczbe slajdow do {images_count if is_carousel else '7-9 (poniewaz oryginal byl wideo, sam zaprojektuj)'}.
 
 WYMAGANIA TECHNICZNE:
 {lang_block}

@@ -37,7 +37,12 @@ Otrzymasz w wiadomosci:
     ],
     "tone": "<ton viralu: prowokacyjny / edukacyjny / konfrontacyjny / ciepły>",
     "slide_count": <ile slajdow>,
-    "image_style_observed": "<jak wygladaly slajdy graficznie>"
+    "image_style_observed": "<jak wygladaly slajdy graficznie>",
+    "text_density_per_slide": [
+      {"slide": 1, "headline_words": <liczba slow naglowka>, "body_words": <liczba slow body, 0 jesli brak>, "density": "minimal|short|medium|long"},
+      {"slide": 2, "headline_words": <int>, "body_words": <int>, "density": "minimal|short|medium|long"},
+      ...
+    ]
   },
   "translation_strategy": {
     "hook_for_user": "<JAK przeniesc hook na produkt usera, zachowujac wzorzec ale zmieniajac tresc>",
@@ -57,9 +62,11 @@ Otrzymasz w wiadomosci:
         "order": 1,
         "type": "hook",
         "headline": "<hook uzywajacy DOKLADNIE tej samej formuly co viral, ale o produkcie/niszy usera>",
-        "body": "<...>",
+        "body": "<... LUB pusty string '' jezeli oryginalny slajd nie mial body>",
         "image_prompt": "<opis sceny do generatora obrazow - replikuj kompozycje viralu>",
-        "image_focus": "<top|bottom|center|...>"
+        "image_focus": "<top|bottom|center|...>",
+        "headline_word_target": <DOKLADNIE tyle slow ile mial headline w oryginalnym slajdzie ±1>,
+        "body_word_target": <DOKLADNIE tyle slow ile mial body w oryginalnym slajdzie, 0 jesli oryginal nie mial body>
       },
       ...
     ],
@@ -94,7 +101,25 @@ NIE zmieniaj tonu nawet jesli brand voice usera mowi inaczej. Zglos to w "transl
 
 Replikuj `image_style` z viralu jako image_prompt dla kazdego slajdu. Generator obrazow uzyje tego + Style Profile usera.
 
-### 5. NIE plagiatuj tekstu
+### 5. DOPASUJ DLUGOSC TEKSTU per-slajd (KRYTYCZNE)
+
+**To najczesciej olewana zasada, a najwazniejsza dla wiernosci viralu.**
+
+Dla KAZDEGO slajdu z osobna:
+1. **Policz** ile slow ma headline na oryginalnym slajdzie (zapisz w `text_density_per_slide`)
+2. **Policz** ile slow ma body na oryginalnym slajdzie
+3. **Twoja replika MUSI miec PODOBNA gestosc** — w obrebie ±1 slowa od oryginalu
+
+PRZYKLADY:
+- Oryginalny slajd 1 ma 3-slowny hook → twoja replika slajdu 1 MA MIEC 2-4 slow w hooku, NIE wiecej
+- Oryginalny slajd 3 ma TYLKO headline (bez body) → twoja replika slajdu 3 ma `body: ""` (pusty)
+- Oryginalny slajd 5 ma 15-slowny akapit → twoja replika slajdu 5 ma ~14-16 slow
+
+ZAKAZ: jesli oryginalny viral byl minimalistyczny (np. "VINTED IS DEAD." 3 slowa) — TWOJA REPLIKA NIE MOZE byc rozwlekla ("Vinted resellerzy juz nie zarabiaja jak kiedys"). Trzymaj sie 3-4 slow.
+
+Pole `headline_word_target` w schemacie JSON wymusi to twardo — wpisz dokladne liczby z analizy oryginalu, potem napisz tekst zeby pasowal.
+
+### 6. NIE plagiatuj tekstu
 
 NIGDY nie kopiuj 1:1 tekstu ze slajdow viralu. Zachowuj WZORZEC, NIE SLOWA.
 
