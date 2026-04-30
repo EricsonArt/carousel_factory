@@ -14,6 +14,7 @@ Phase 1: implementujemy tylko OpenAI (GPT Image). Reszta jest stub dla Phase 3.
 import io
 import time
 import base64
+import threading
 import requests
 from pathlib import Path
 from typing import Optional
@@ -34,6 +35,13 @@ class QuotaExhausted(Exception):
 class ImageGenerationError(Exception):
     """Wszystkie providery zwrocily blad nie-quota."""
     pass
+
+
+# Rate limiter dla Gemini — free tier to 15 RPM, dajemy 4.5s odstep zeby miec margines
+# Wspoldzielony miedzy watkami (automat moze generowac wiele karuzel rownolegle)
+_gemini_rate_lock = threading.Lock()
+_gemini_last_call_at = 0.0
+_GEMINI_MIN_INTERVAL_SEC = 4.5
 
 
 def generate_image(
@@ -272,10 +280,22 @@ def _to_file_object(ref):
 # GEMINI - Phase 3 stub
 # ─────────────────────────────────────────────────────────────
 
+def _gemini_rate_limit_wait():
+    """Wymusza min. interwal miedzy callami Gemini (free tier: 15 RPM)."""
+    global _gemini_last_call_at
+    with _gemini_rate_lock:
+        now = time.time()
+        elapsed = now - _gemini_last_call_at
+        if elapsed < _GEMINI_MIN_INTERVAL_SEC:
+            sleep_for = _GEMINI_MIN_INTERVAL_SEC - elapsed
+            time.sleep(sleep_for)
+        _gemini_last_call_at = time.time()
+
+
 def _call_gemini(model_id: str, prompt: str, refs: Optional[list], size: tuple) -> bytes:
     """
-    Gemini 2.0 Flash image generation (FREE tier: 15 req/min, 1500/dzień).
-    Wymaga GEMINI_API_KEY w Streamlit Secrets.
+    Gemini image generation. Z built-in rate limiterem (4.5s/req) i retry na 429.
+    Free tier: 15 RPM. Wymaga GEMINI_API_KEY w Streamlit Secrets.
     """
     if not GEMINI_API_KEY:
         raise QuotaExhausted("Brak GEMINI_API_KEY — dodaj do Streamlit Secrets.")
@@ -298,25 +318,55 @@ def _call_gemini(model_id: str, prompt: str, refs: Optional[list], size: tuple) 
                 pass
     parts.append(types.Part.from_text(text=prompt))
 
-    try:
-        resp = client.models.generate_content(
-            model=model_id,
-            contents=parts,
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE", "TEXT"],
-            ),
-        )
-    except Exception as e:
-        msg = str(e).lower()
-        if "rate" in msg or "quota" in msg or "429" in msg:
-            raise QuotaExhausted(f"Gemini quota: {e}")
-        raise ImageGenerationError(f"Gemini error: {e}")
+    last_error = None
+    for attempt in range(4):  # 1 proba + 3 retry
+        # Rate limit przed kazda proba
+        _gemini_rate_limit_wait()
 
-    for candidate in resp.candidates:
-        for part in candidate.content.parts:
-            if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
-                return part.inline_data.data
-    raise ImageGenerationError("Gemini nie zwrocil obrazu — sprobuj ponownie")
+        try:
+            resp = client.models.generate_content(
+                model=model_id,
+                contents=parts,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE", "TEXT"],
+                ),
+            )
+            # Sukces — wyciagnij obraz
+            for candidate in resp.candidates:
+                for part in candidate.content.parts:
+                    if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
+                        return part.inline_data.data
+            # Brak obrazu w odpowiedzi — sprobuj jeszcze raz
+            last_error = ImageGenerationError("Gemini zwrocil odpowiedz bez obrazu")
+            time.sleep(2)
+            continue
+
+        except Exception as e:
+            msg = str(e).lower()
+            last_error = e
+
+            # 429 / rate limit → backoff i retry
+            if "429" in msg or "rate" in msg or "resource_exhausted" in msg or "too many" in msg:
+                if attempt < 3:
+                    backoff = 10 * (attempt + 1)  # 10, 20, 30 sek
+                    time.sleep(backoff)
+                    continue
+                # Wyczerpane proby — to RPM limit, traktujemy jako transient
+                raise QuotaExhausted(
+                    f"Gemini rate limit po {attempt+1} probach: {e}"
+                )
+
+            # Daily quota / billing → final
+            if "quota" in msg or "daily" in msg or "billing" in msg:
+                raise QuotaExhausted(f"Gemini daily quota: {e}")
+
+            # Inny blad — spróbuj raz jeszcze, potem propaguj
+            if attempt < 1:
+                time.sleep(3)
+                continue
+            raise ImageGenerationError(f"Gemini error: {e}")
+
+    raise ImageGenerationError(f"Gemini nie zwrocil obrazu po 4 probach: {last_error}")
 
 
 def _ref_to_gemini_part(ref):

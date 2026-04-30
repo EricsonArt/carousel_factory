@@ -154,6 +154,13 @@ def run_automation_batch(
                 })
                 continue
 
+            # Sprawdz ile slajdow padlo na fallback (czarne/gradientowe tlo zamiast AI)
+            slides_meta = carousel.get("slides", []) or []
+            fallback_slides = sum(
+                1 for s in slides_meta
+                if isinstance(s, dict) and str(s.get("image_provider", "")).startswith("fallback")
+            )
+
             scheduled_iso = sched_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
             if not use_publer:
@@ -208,6 +215,8 @@ def run_automation_batch(
                     "scheduled_at": scheduled_iso,
                     "status": "scheduled",
                     "publer_post_id": str(publer_post_id),
+                    "fallback_slides": fallback_slides,
+                    "total_slides": len(slides_meta),
                 })
 
             except Exception as e:

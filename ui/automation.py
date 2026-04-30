@@ -145,6 +145,15 @@ def _render_progress(brand_id: str):
 
         if scheduled or generated:
             section_title("Harmonogram", icon="📅")
+
+            total_fallback = sum(r.get("fallback_slides", 0) for r in scheduled + generated)
+            total_slides = sum(r.get("total_slides", 0) for r in scheduled + generated)
+            if total_fallback > 0:
+                st.warning(
+                    f"⚠️ **{total_fallback} z {total_slides} slajdów** dostało gradient zamiast AI obrazu "
+                    f"(rate-limit Gemini lub padł generator). Karuzele z fallbackiem oznaczone 🟡 niżej."
+                )
+
             ok_items = sorted(scheduled + generated, key=lambda r: r.get("scheduled_at", ""))
             for r in ok_items:
                 dt_str = r.get("scheduled_at", "")
@@ -153,8 +162,15 @@ def _render_progress(brand_id: str):
                     dt_label = dt.strftime("%d.%m.%Y  %H:%M UTC")
                 except Exception:
                     dt_label = dt_str
-                icon = "📅" if r["status"] == "scheduled" else "📁"
-                st.markdown(f"{icon} **{dt_label}** — {r['topic'][:70]}")
+                base_icon = "📅" if r["status"] == "scheduled" else "📁"
+                fb = r.get("fallback_slides", 0)
+                tot = r.get("total_slides", 0)
+                quality_badge = ""
+                if fb > 0 and tot > 0:
+                    quality_badge = f"  🟡 {fb}/{tot} bez tła"
+                elif tot > 0:
+                    quality_badge = f"  🟢 {tot}/{tot} z tłem"
+                st.markdown(f"{base_icon} **{dt_label}** — {r['topic'][:65]}{quality_badge}")
 
         if errors:
             with st.expander(f"⚠️ Błędy ({len(errors)})"):

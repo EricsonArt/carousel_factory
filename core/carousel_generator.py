@@ -159,14 +159,21 @@ def render_slide_image(
                 model_override=model_override,
                 inline_text=inline_text_payload,
             )
-        except (QuotaExhausted, ImageGenerationError):
+        except QuotaExhausted as _e:
             result = {
-                "image_bytes": _solid_background_with_palette(style),
-                "provider": "fallback",
-                "model": "solid_color",
+                "image_bytes": _gradient_background_with_palette(style),
+                "provider": "fallback_quota",
+                "model": f"quota: {str(_e)[:80]}",
                 "cost_usd": 0.0,
             }
-            # Fallback nie ma tekstu — wymus overlay
+            inline_text_payload = None
+        except ImageGenerationError as _e:
+            result = {
+                "image_bytes": _gradient_background_with_palette(style),
+                "provider": "fallback_error",
+                "model": f"err: {str(_e)[:80]}",
+                "cost_usd": 0.0,
+            }
             inline_text_payload = None
     else:
         # Bez AI: gradient z palety + zawsze Pillow overlay
