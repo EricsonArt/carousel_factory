@@ -14,6 +14,7 @@ import io
 import json
 import re
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Optional
 
@@ -49,6 +50,34 @@ def _detect_platform(url: str) -> str:
     return "unknown"
 
 
+def _sanitize_url(url: str) -> str:
+    """
+    Czysci URL: usuwa query string i fragment (TikTok i IG dorzucaja tony tracking
+    parametrow ktore mylą yt-dlp).
+
+    Przyklad:
+      https://www.tiktok.com/@kit/photo/123?is_from_webapp=1&sender_device=pc...
+      → https://www.tiktok.com/@kit/photo/123
+
+    Dodatkowo: vt.tiktok.com / vm.tiktok.com shortlinks zostaja jak sa — yt-dlp
+    sam je rezolwuje. Trailing slash zostaje (yt-dlp toleruje).
+    """
+    s = url.strip()
+    if not s:
+        return s
+    # Usun white spaces wewnatrz (np. z kopiowania ze Slacka)
+    s = s.replace(" ", "")
+    parsed = urllib.parse.urlparse(s)
+    if not parsed.scheme:
+        # User wkleil bez https:// — dorzuc
+        s = "https://" + s
+        parsed = urllib.parse.urlparse(s)
+    clean = urllib.parse.urlunparse((
+        parsed.scheme, parsed.netloc, parsed.path, "", "", ""
+    ))
+    return clean
+
+
 def fetch_viral_post(url: str) -> dict:
     """
     Pobiera metadane + obrazy viralu przez yt-dlp.
@@ -67,6 +96,9 @@ def fetch_viral_post(url: str) -> dict:
     if not url or not any(d in url.lower() for d in SUPPORTED_DOMAINS):
         raise ViralFetchError(f"URL musi byc z TikToka lub Instagrama. Otrzymano: {url}")
 
+    # Sanitize URL — strip query string i tracking parametry, ktore mylą yt-dlp
+    clean_url = _sanitize_url(url)
+
     try:
         import yt_dlp
     except ImportError:
@@ -81,19 +113,32 @@ def fetch_viral_post(url: str) -> dict:
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(clean_url, download=False)
     except Exception as e:
         msg = str(e)
-        if "private" in msg.lower():
-            raise ViralFetchError("Post jest prywatny lub usuniety.")
-        if "rate" in msg.lower() or "429" in msg:
+        msg_lower = msg.lower()
+        if "private" in msg_lower or "login required" in msg_lower:
+            raise ViralFetchError("Post jest prywatny / wymaga logowania.")
+        if "not found" in msg_lower or "404" in msg or "removed" in msg_lower:
+            raise ViralFetchError("Post nie istnieje lub zostal usuniety.")
+        if "rate" in msg_lower or "429" in msg or "too many" in msg_lower:
             raise ViralFetchError("Rate limit od TikToka/IG. Sprobuj za 5-10 min.")
-        raise ViralFetchError(f"yt-dlp blad: {msg[:200]}")
+        if "unsupported url" in msg_lower:
+            raise ViralFetchError(
+                f"yt-dlp nie obsluguje tego typu URL ({clean_url}). "
+                "Mozliwe przyczyny: (1) yt-dlp na produkcji jest stary — sprawdz w Streamlit Cloud "
+                "czy requirements.txt wymusza yt-dlp>=2025.1.15. (2) URL ma nietypowy format — "
+                "sprobuj wkleic 'czysty' link bez parametrow, np. https://www.tiktok.com/@user/photo/123 "
+                "(bez '?is_from_webapp=...'). (3) Post moze byc geo-blocked."
+            )
+        if "geo" in msg_lower or "country" in msg_lower:
+            raise ViralFetchError("Post jest zablokowany w tym regionie (geo-block).")
+        raise ViralFetchError(f"yt-dlp blad: {msg[:300]}")
 
     if not info:
         raise ViralFetchError("yt-dlp nie zwrocil danych.")
 
-    platform = _detect_platform(url)
+    platform = _detect_platform(clean_url)
     caption = info.get("description") or info.get("title") or ""
     hashtags = re.findall(r"#\w+", caption)
 
@@ -147,7 +192,11 @@ def fetch_viral_post(url: str) -> dict:
                     images_bytes.append(content)
 
     if not images_bytes:
-        raise ViralFetchError("Nie udalo sie pobrac zadnych obrazow z viralu.")
+        raise ViralFetchError(
+            "Nie udalo sie pobrac zadnych obrazow z viralu. "
+            "yt-dlp zwrocil metadata ale bez URL obrazow — moze post byc tylko-tekst, "
+            "lub ekstraktor nie obsluguje tej wersji TikTok/IG. Sprobuj inny link."
+        )
 
     return {
         "platform": platform,
@@ -155,7 +204,7 @@ def fetch_viral_post(url: str) -> dict:
         "hashtags": hashtags,
         "images_bytes": images_bytes,
         "is_carousel": is_carousel,
-        "original_url": url,
+        "original_url": clean_url,
         "raw_meta": {
             "title": info.get("title", "")[:200],
             "uploader": info.get("uploader", ""),

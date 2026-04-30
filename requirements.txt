@@ -11,7 +11,8 @@ Pillow>=10.1.0    # 10.1+ supports ImageFont.load_default(size=...)
 requests>=2.31.0
 
 # Web scraping fallback
-yt-dlp>=2024.10.0
+# yt-dlp 2025.x ma poprawiona obsluge TikTok /photo/ URL i Instagram carousels.
+yt-dlp>=2025.1.15
 ddgs>=8.0.0
 beautifulsoup4>=4.12.0
 
