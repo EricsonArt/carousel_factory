@@ -71,6 +71,7 @@ def run_automation_batch(
     publer_api_key: str,
     publer_workspace_id: str,
     slots: list,
+    text_settings: Optional[dict] = None,
 ):
     """
     Pełna automatyzacja w tle:
@@ -144,6 +145,7 @@ def run_automation_batch(
                     image_quality=image_quality,
                     model_override=model_override,
                     language=language,
+                    text_settings=text_settings,
                 )
             except Exception as e:
                 results.append({

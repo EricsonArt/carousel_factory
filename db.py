@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS brand_briefs (
     forbidden_claims TEXT,       -- JSON list[str] (np. medyczne, income claims)
     cta_url TEXT,                -- link do strony/oferty (uzyte w CTA slajdzie)
     cta_text TEXT,               -- tekst CTA np. "Klik link w bio"
+    copy_framework TEXT DEFAULT 'default',  -- 'default' | 'viral_loop' (struktura promptu copywritera)
     raw_research TEXT,           -- JSON dump z auto-researcha
     updated_at TEXT,
     FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
@@ -196,6 +197,8 @@ def _migrate_brand_briefs(conn):
         "icp_summary": "TEXT",
         "icp_channels": "TEXT",       # JSON list[str]
         "anti_avatar": "TEXT",
+        "copy_framework": "TEXT DEFAULT 'default'",
+        "text_settings": "TEXT",  # JSON: rozmiary fontu, kolory, stroke, pozycja, font, length, smart_fitting
     }
     for col, col_type in new_cols.items():
         if col not in existing:
@@ -307,7 +310,7 @@ def delete_brand(brand_id: str):
 
 _BRIEF_JSON_FIELDS = ["usps", "avatars", "objections", "guarantees",
                        "social_proof", "forbidden_claims", "raw_research",
-                       "urgency_hooks", "icp_channels"]
+                       "urgency_hooks", "icp_channels", "text_settings"]
 
 
 def upsert_brief(brand_id: str, brief: dict):

@@ -13,6 +13,7 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 from config import PUBLER_API_KEY, PUBLER_WORKSPACE_ID, SLOT_HOURS
 from db import get_brand, get_brief, list_styles, get_automation_config, update_automation_config
 from ui.theme import page_header, section_title
+from ui.text_settings import render_text_settings_panel
 
 
 # ─────────────────────────────────────────────────────────────
@@ -87,6 +88,7 @@ def _run_auto_thread(brand_id: str, job: dict, params: dict):
         publer_api_key=params["publer_api_key"],
         publer_workspace_id=params["publer_workspace_id"],
         slots=params["slots"],
+        text_settings=params.get("text_settings"),
     )
 
 
@@ -316,6 +318,10 @@ def render_automation(brand_id: str):
     )
     prefer_provider, model_override, image_quality = _MODEL_PARAMS.get(selected_model, (None, None, "low"))
 
+    # Panel stylu tekstu — pre-wypelniony z brief.text_settings, override per-batch
+    st.markdown('<div style="margin-top:0.6rem;"></div>', unsafe_allow_html=True)
+    render_text_settings_panel(brand_id, brief, key_prefix="auto", default_expanded=False)
+
     # Sloty czasowe (info)
     st.markdown('<div style="margin-top:0.4rem;"></div>', unsafe_allow_html=True)
     slots_str = ", ".join(f"{s}–{e}" for s, e in SLOT_HOURS)
@@ -452,6 +458,7 @@ def render_automation(brand_id: str):
                 "publer_api_key": PUBLER_API_KEY,
                 "publer_workspace_id": PUBLER_WORKSPACE_ID,
                 "slots": SLOT_HOURS,
+                "text_settings": st.session_state.get("auto_text_settings"),
             })
             st.rerun()
 

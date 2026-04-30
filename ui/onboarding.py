@@ -81,6 +81,9 @@ def render_onboarding(brand_id: str):
     st.progress(completion)
     st.markdown('<div style="margin-top:0.5rem;"></div>', unsafe_allow_html=True)
 
+    # ─────────────── Framework copywritera (per-marka) ───────────────
+    _render_framework_picker(brand_id, brief)
+
     # Section picker as visual grid
     section_title("Wybierz sekcję do wypełnienia", icon="📋")
 
@@ -277,3 +280,56 @@ def _save_section_raw(brand_id: str, key: str, value: str):
         except Exception:
             value = 0.0
     upsert_brief(brand_id, {key: value})
+
+
+# ─────────────────────────────────────────────────────────────
+# FRAMEWORK COPYWRITERA (per-marka)
+# ─────────────────────────────────────────────────────────────
+
+FRAMEWORK_OPTIONS = {
+    "default": {
+        "label": "Default — uniwersalna struktura",
+        "desc": "Klasyczny hook + body + CTA. Pasuje do większości marek: e-commerce produktów fizycznych, "
+                "lifestyle, edukacja, B2B, marki korporacyjne. Krótki caption (300-500 znaków), "
+                "CTA prowadzi do `cta_url` z briefa.",
+    },
+    "viral_loop": {
+        "label": "Viral Loop — agresywna 9-funkcyjna struktura",
+        "desc": "Hook paradoksalny (8 wersji wewnętrznie, top-1 + 3 alternatywy) → personal callout → "
+                "open loop story → pain z 3 faktami → pattern interrupt → solution jako koncept (bez "
+                "nazwy produktu) → social proof → cliffhanger ze strzałką do opisu → CTA z wyborem "
+                "i słowem-trigger w komentarzu. Caption 5-sekcyjny z P.S. anticipated regret. "
+                "Dla: info-produkty, kursy, coaching, reselling, SaaS z lead magnetem, personal brand. "
+                "NIE dla: e-commerce produktów fizycznych, B2B enterprise, lifestyle afirmatywny.",
+    },
+}
+
+
+def _render_framework_picker(brand_id: str, brief: dict):
+    current = brief.get("copy_framework") or "default"
+    if current not in FRAMEWORK_OPTIONS:
+        current = "default"
+
+    keys = list(FRAMEWORK_OPTIONS.keys())
+    selected = st.selectbox(
+        "🎯 Framework copywritera",
+        options=keys,
+        index=keys.index(current),
+        format_func=lambda k: FRAMEWORK_OPTIONS[k]["label"],
+        key=f"framework_{brand_id}",
+        help="Określa strukturę psychologiczną generowanych karuzel. Default działa dla większości marek; "
+             "Viral Loop to bardziej agresywna struktura dedykowana info-produktom i lead magnetom.",
+    )
+
+    st.markdown(f"""
+    <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;
+                padding:0.85rem 1.1rem;margin:0.4rem 0 1.2rem;font-size:0.82rem;
+                color:#475569;line-height:1.55;">
+        {FRAMEWORK_OPTIONS[selected]["desc"]}
+    </div>
+    """, unsafe_allow_html=True)
+
+    if selected != current:
+        upsert_brief(brand_id, {"copy_framework": selected})
+        st.success(f"Framework zmieniony na: {FRAMEWORK_OPTIONS[selected]['label']}")
+        st.rerun()

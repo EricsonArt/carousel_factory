@@ -12,6 +12,7 @@ import streamlit as st
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from core.carousel_generator import generate_carousel, export_carousel_as_zip
+from ui.text_settings import render_text_settings_panel
 from db import get_brand, get_brief, list_styles, update_carousel
 from config import (
     DEFAULT_SLIDES, MIN_SLIDES, MAX_SLIDES, PUBLER_API_KEY, PUBLER_WORKSPACE_ID,
@@ -77,6 +78,7 @@ def _run_generation_job(jobs: dict, job_id: str, brand_id: str, params: dict):
             model_override=params.get("model_override"),
             language=params.get("language", "pl"),
             text_mode=params.get("text_mode", "overlay"),
+            text_settings=params.get("text_settings"),
             progress_callback=cb,
         )
         jobs[job_id]["carousel"] = carousel
@@ -525,6 +527,10 @@ def render_generate(brand_id: str):
     # ── Formularz generacji ────────────────────────────────────────────────────
     section_title("Parametry generacji", icon="⚙️")
 
+    # Panel stylu tekstu — POZA formularzem (zawiera button "Zapisz jako default")
+    # Wartosci trzymane w session_state["generate_text_settings"], submit je odczyta.
+    render_text_settings_panel(brand_id, brief, key_prefix="generate", default_expanded=False)
+
     # Inicjalizacja powiązanego pola tekstowego (sterowane z sekcji AI powyżej)
     if "topic_input" not in st.session_state:
         st.session_state["topic_input"] = ""
@@ -697,6 +703,7 @@ def render_generate(brand_id: str):
             "model_override": model_override,
             "language": language,
             "text_mode": text_mode,
+            "text_settings": st.session_state.get("generate_text_settings"),
         })
         st.success(
             f"✅ Karuzela ruszyła w tle (job `{job_id}`). "

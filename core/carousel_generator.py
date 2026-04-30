@@ -11,24 +11,21 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 from config import (
     PROMPTS_DIR, CAROUSELS_DIR,
     SLIDE_WIDTH, SLIDE_HEIGHT,
-    SLIDE_FONT_HEADLINE, SLIDE_FONT_BODY,
-    SLIDE_TEXT_COLOR, SLIDE_TEXT_STROKE, SLIDE_TEXT_STROKE_WIDTH,
     DEFAULT_SLIDES, MIN_SLIDES, MAX_SLIDES,
 )
-try:
-    from config import SLIDE_TEXT_STROKE_WIDTH_BODY
-except ImportError:
-    SLIDE_TEXT_STROKE_WIDTH_BODY = max(2, SLIDE_TEXT_STROKE_WIDTH - 3)
 from core.llm import call_claude_json, validate_against_brief
 from core.image_router import generate_image, QuotaExhausted, ImageGenerationError
 from core.utils import (
-    generate_id, ensure_dir, write_image_bytes, hex_to_rgb,
-    wrap_text_for_slide, sanitize_filename,
+    generate_id, ensure_dir, hex_to_rgb, sanitize_filename,
+)
+from core.text_renderer import (
+    apply_text_to_image, merge_text_settings, length_directive_for_prompt,
+    DEFAULT_TEXT_SETTINGS,
 )
 from db import create_carousel, update_carousel, get_brief, get_style
 
@@ -37,8 +34,27 @@ from db import create_carousel, update_carousel, get_brief, get_style
 # STEP 1: COPYWRITER
 # ─────────────────────────────────────────────────────────────
 
-def _load_copy_prompt() -> str:
-    return (PROMPTS_DIR / "carousel_copy.md").read_text(encoding="utf-8")
+COPY_FRAMEWORKS = {
+    "default": "carousel_copy_default.md",
+    "viral_loop": "carousel_copy_viral_loop.md",
+}
+
+
+def _load_copy_prompt(brief: Optional[dict] = None) -> str:
+    """
+    Wybiera prompt copywritera per-marka na podstawie brief.copy_framework.
+      - "default" (domyslnie): uniwersalny prompt — pasuje do wiekszosci marek (e-commerce, lifestyle, edu, B2B)
+      - "viral_loop": 9-funkcyjna struktura "Petla ktora sie nie zamyka" z hookiem paradoksalnym
+        + caption 5-sekcyjny + slowo-trigger w komentarzu. Pasuje dla info-produktow,
+        coachingu, "make money online", reselling, personal brand z lead magnetem.
+    Fallback: jezeli plik nie istnieje, uzywa default.
+    """
+    framework = (brief or {}).get("copy_framework", "default")
+    filename = COPY_FRAMEWORKS.get(framework, COPY_FRAMEWORKS["default"])
+    path = PROMPTS_DIR / filename
+    if not path.exists():
+        path = PROMPTS_DIR / COPY_FRAMEWORKS["default"]
+    return path.read_text(encoding="utf-8")
 
 
 def generate_copy(
@@ -47,13 +63,18 @@ def generate_copy(
     style: Optional[dict] = None,
     slide_count: int = DEFAULT_SLIDES,
     language: str = "pl",
+    text_length: str = "medium",
 ) -> dict:
     """
     Generuje cala karuzele tekstowa (slides + caption + hashtags).
     language: 'pl' | 'en' — w jakim języku ma być treść slajdów.
+    text_length: 'short' | 'medium' | 'long' — wstrzykuje twardy limit dlugosci do user-prompta,
+                 zeby tekst pasowal do parametrow renderera (Pillow potem nie musi obciec).
     """
     slide_count = max(MIN_SLIDES, min(MAX_SLIDES, slide_count))
-    system_prompt = _load_copy_prompt()
+    system_prompt = _load_copy_prompt(brief)
+    framework = (brief or {}).get("copy_framework", "default")
+    length_block = f"\nLIMIT DLUGOSCI TEKSTU (priorytet nad system prompt): {length_directive_for_prompt(text_length)}\n"
 
     style_section = ""
     if style:
@@ -78,17 +99,38 @@ STYL VISUAL (do inspiracji hookow i tonu):
             "Hashtagi mieszane PL i EN."
         )
 
+    if framework == "viral_loop":
+        process_block = f"""
+PROCES (zgodnie z system promptem):
+1. Slajd 1 (HOOK PARADOKSALNY): wygeneruj 8 wersji hooka roznymi technikami,
+   oceniaj kazda w 4 kryteriach (paradoks/konkret/dlugosc/personal stakes),
+   zwroc TOP-1 w headline+body i 3 alternatywy w slides[0].alternatives[].
+2. Pozostale slajdy: zmapuj funkcje psychologiczne na N={slide_count} wedlug tabeli z system promptu.
+3. Caption: 5 sekcji rozdzielonych \\n\\n (hook-recap, mikropotwierdzenie,
+   wartosc ucieta, CTA+deliverables, P.S. z anticipated regret), 600-1100 znakow.
+4. cta_keyword: jedno slowo UPPERCASE pasujace do niszy (uzyj brief.cta_keyword jesli istnieje).
+
+WAZNE (viral_loop):
+- Slajd PROOF: wszystkie imiona/liczby z brief.social_proof[] / brief.testimonials[].
+- Slajd SOLUTION: NIE wymieniaj nazwy produktu — mowisz "system ktory zbudowalem".
+- Slajd CTA: format wybor (2 opcje) + slowo-trigger UPPERCASE w komentarzu, NIE "DM mi" / "link w bio".
+- Przed zwroceniem przejdz checkliste walidacji z system promptu.
+"""
+        max_tokens = 8000
+    else:
+        process_block = ""
+        max_tokens = 6000
+
     prompt = f"""Stworz MAKSYMALNIE WIRALOWA karuzele Instagram/TikTok na temat:
 "{topic}"
 
 PARAMETRY:
 - Liczba slajdow: {slide_count} (dokladnie tyle)
 {language_directive}
-
+{length_block}
 BRIEF MARKI:
 {json.dumps(brief, ensure_ascii=False, indent=2)}
-{style_section}
-
+{style_section}{process_block}
 WAZNE:
 - Uzywaj WYLACZNIE USPs i ofert z briefa - nie wymyslaj nowych cech produktu
 - Trzymaj sie voice_tone z briefa
@@ -98,7 +140,7 @@ WAZNE:
 
 Zwroc JSON zgodny ze schematem opisanym w system promptcie. TYLKO JSON.
 """
-    return call_claude_json(prompt, system=system_prompt, max_tokens=6000)
+    return call_claude_json(prompt, system=system_prompt, max_tokens=max_tokens)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -114,12 +156,17 @@ def render_slide_image(
     image_quality: str = "low",
     model_override: Optional[str] = None,
     text_mode: str = "overlay",
+    slide_index: int = 0,
+    text_settings: Optional[dict] = None,
 ) -> dict:
     """
     Generuje obraz tla + tekst.
     text_mode:
       - "overlay" (default) — Pillow naklada tekst po wygenerowaniu obrazu (PL znaki gwarantowane)
       - "inline"  — model AI generuje tekst RAZEM z obrazem (TikTok-style, ale moze masakrowac PL)
+    slide_index: 0 = slajd 1 (hero rozmiar), >=1 = pozostale (rest rozmiar).
+    text_settings: dict z core.text_renderer.DEFAULT_TEXT_SETTINGS (rozmiar, font, kolor, stroke, pozycja).
+                   None → uzywa domyslnych.
     Zwraca {"image_path": ..., "image_provider": ..., "image_model": ...}
     """
     headline = slide.get("headline", "")
@@ -190,7 +237,12 @@ def render_slide_image(
 
     # Tekst nakladamy Pillowem TYLKO gdy nie wstrzyknelismy go do AI
     if not inline_text_payload:
-        img = _overlay_text(img, headline, body, image_focus, style)
+        img = apply_text_to_image(
+            img, headline, body,
+            slide_index=slide_index,
+            text_settings=text_settings,
+            image_focus_hint=image_focus,
+        )
 
     ensure_dir(output_path.parent)
     img.save(output_path, "JPEG", quality=92)
@@ -201,150 +253,6 @@ def render_slide_image(
         "image_model": result["model"],
         "cost_usd": result["cost_usd"],
     }
-
-
-def _overlay_text(img: Image.Image, headline: str, body: str,
-                    focus: str, style: Optional[dict]) -> Image.Image:
-    """
-    Naklada tekst w stylu TikTok/IG: Montserrat Black + mocny czarny obrys.
-    Bez ciemnego boxa za tekstem — sam stroke wystarcza dla czytelnosci.
-
-    Safe zones (zeby nie zaslaniac UI platformy):
-      - top 15%   → TikTok username/header, IG handle
-      - bottom 28% → TikTok action buttons + caption, IG caption
-      → tekst ma siedziec w srodkowych ~57% wysokosci.
-    """
-    if not headline and not body:
-        return img
-
-    W, H = img.size
-    draw = ImageDraw.Draw(img)
-
-    safe_top = int(H * 0.15)
-    safe_bottom = int(H * 0.28)
-    available_h = H - safe_top - safe_bottom
-
-    # Wraps — krotkie linie dla impactu
-    headline_lines = wrap_text_for_slide(headline.upper() if headline else "", max_chars_per_line=14)
-    body_lines = wrap_text_for_slide(body or "", max_chars_per_line=28)
-
-    # Mniejsze fonty — naglowek byl za duzy
-    total_chars = sum(len(l) for l in headline_lines + body_lines)
-    head_size = _pick_font_size(headline_lines, max_size=92, min_size=56)
-    body_size = _pick_font_size(body_lines, max_size=36, min_size=26)
-    if total_chars > 120:
-        head_size = int(head_size * 0.85)
-        body_size = int(body_size * 0.85)
-
-    head_line_gap = 10
-    body_line_gap = 6
-    block_gap = 28
-
-    def _measure(hs, bs):
-        hf = _load_font(SLIDE_FONT_HEADLINE, hs)
-        bf = _load_font(SLIDE_FONT_BODY, bs)
-        hh = sum(_text_height(l, hf) for l in headline_lines) \
-             + head_line_gap * max(0, len(headline_lines) - 1)
-        bh = sum(_text_height(l, bf) for l in body_lines) \
-             + body_line_gap * max(0, len(body_lines) - 1)
-        g = block_gap if headline_lines and body_lines else 0
-        return hf, bf, hh, bh, g, hh + g + bh
-
-    head_font, body_font, head_h, body_h, gap, total_h = _measure(head_size, body_size)
-
-    # Auto-shrink: jak nie miesci sie w safe zone, skaluj az do min
-    while total_h > available_h and (head_size > 56 or body_size > 26):
-        head_size = max(56, int(head_size * 0.92))
-        body_size = max(26, int(body_size * 0.92))
-        head_font, body_font, head_h, body_h, gap, total_h = _measure(head_size, body_size)
-        if head_size <= 56 and body_size <= 26:
-            break
-
-    # Pozycja w safe zone
-    if focus == "top":
-        y_start = safe_top
-    elif focus == "bottom":
-        y_start = H - safe_bottom - total_h
-    else:
-        # center w obrebie safe area
-        y_start = safe_top + (available_h - total_h) // 2
-
-    # Hard clamp
-    y_start = max(safe_top, min(y_start, H - safe_bottom - total_h))
-
-    # Render headline — Montserrat Black + grube czarne stroke
-    y = y_start
-    for line in headline_lines:
-        x = (W - _text_width(line, head_font)) // 2
-        draw.text(
-            (x, y), line,
-            font=head_font,
-            fill=SLIDE_TEXT_COLOR,
-            stroke_width=SLIDE_TEXT_STROKE_WIDTH,
-            stroke_fill=SLIDE_TEXT_STROKE,
-        )
-        y += _text_height(line, head_font) + head_line_gap
-
-    if headline_lines and body_lines:
-        y += gap
-
-    # Render body — cienszy stroke
-    for line in body_lines:
-        x = (W - _text_width(line, body_font)) // 2
-        draw.text(
-            (x, y), line,
-            font=body_font,
-            fill=SLIDE_TEXT_COLOR,
-            stroke_width=SLIDE_TEXT_STROKE_WIDTH_BODY,
-            stroke_fill=SLIDE_TEXT_STROKE,
-        )
-        y += _text_height(line, body_font) + body_line_gap
-
-    return img
-
-
-def _load_font(path: str, size: int):
-    """
-    Probuje zaladowac font ze sciezki. Obsluga edge case'ow:
-      - empty path (brak fontow systemowych) -> Pillow default ze skalowaniem (10.1+)
-      - nie znaleziony plik -> default ze skalowaniem
-      - inny blad -> default ze skalowaniem
-    """
-    if path:
-        try:
-            return ImageFont.truetype(path, size)
-        except (OSError, IOError):
-            pass
-
-    # Fallback - Pillow 10.1+ default font supports size
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        # Pillow < 10.1 - bitmap font bez size
-        return ImageFont.load_default()
-
-
-def _pick_font_size(lines: list[str], max_size: int, min_size: int) -> int:
-    if not lines:
-        return min_size
-    longest = max(len(l) for l in lines)
-    if longest <= 12:
-        return max_size
-    if longest <= 18:
-        return int(max_size * 0.85)
-    if longest <= 24:
-        return int(max_size * 0.7)
-    return min_size
-
-
-def _text_width(text: str, font) -> int:
-    bbox = font.getbbox(text)
-    return bbox[2] - bbox[0]
-
-
-def _text_height(text: str, font) -> int:
-    bbox = font.getbbox(text)
-    return bbox[3] - bbox[1]
 
 
 def _solid_background_with_palette(style: Optional[dict]) -> bytes:
@@ -395,16 +303,19 @@ def generate_carousel(
     model_override: Optional[str] = None,
     language: str = "pl",
     text_mode: str = "overlay",
+    text_settings: Optional[dict] = None,
     progress_callback=None,
 ) -> dict:
     """
     Pelny pipeline:
       1. Czyta brief + styl z bazy
-      2. Generuje copy (Claude)
+      2. Generuje copy (Claude)  — uwzglednia text_settings.text_length
       3. Walidacja vs brief
-      4. Per slajd: generuje obraz + naklada tekst
+      4. Per slajd: generuje obraz + naklada tekst (z text_settings, slide_index)
       5. Zapis do bazy + dysk
 
+    text_settings: dict z text_renderer.DEFAULT_TEXT_SETTINGS. Jesli None, czyta z brief.text_settings;
+                   jesli brief tez nie ma — uzywa domyslnych.
     progress_callback(stage: str, pct: float) - opcjonalny dla UI.
 
     Zwraca: dict z carouselem (taki sam jak db.get_carousel)
@@ -412,10 +323,15 @@ def generate_carousel(
     brief = get_brief(brand_id) or {}
     style = get_style(style_id) if style_id else None
 
+    # Resolve text_settings: parametr -> brief.text_settings -> defaults
+    effective_text_settings = merge_text_settings(text_settings or brief.get("text_settings"))
+    text_length = effective_text_settings.get("text_length", "medium")
+
     if progress_callback:
         progress_callback("Generuje tekst karuzeli...", 0.1)
 
-    copy_data = generate_copy(topic, brief, style, slide_count, language=language)
+    copy_data = generate_copy(topic, brief, style, slide_count,
+                               language=language, text_length=text_length)
 
     if progress_callback:
         progress_callback("Walidacja zgodnosci z briefem...", 0.25)
@@ -451,6 +367,8 @@ def generate_carousel(
                 image_quality=image_quality,
                 model_override=model_override,
                 text_mode=text_mode,
+                slide_index=i,
+                text_settings=effective_text_settings,
             )
         except Exception as e:
             img_meta = {
