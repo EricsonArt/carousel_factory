@@ -111,34 +111,71 @@ def fetch_viral_post(url: str) -> dict:
         "extract_flat": False,
     }
 
+    platform = _detect_platform(clean_url)
+    info = None
+    yt_dlp_error: Optional[str] = None
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(clean_url, download=False)
     except Exception as e:
-        msg = str(e)
-        msg_lower = msg.lower()
+        yt_dlp_error = str(e)
+        msg_lower = yt_dlp_error.lower()
+
+        # Fatalne bledy — nie ma sensu probowac fallbacku
         if "private" in msg_lower or "login required" in msg_lower:
             raise ViralFetchError("Post jest prywatny / wymaga logowania.")
-        if "not found" in msg_lower or "404" in msg or "removed" in msg_lower:
+        if "not found" in msg_lower or "404" in msg_lower or "removed" in msg_lower:
             raise ViralFetchError("Post nie istnieje lub zostal usuniety.")
-        if "rate" in msg_lower or "429" in msg or "too many" in msg_lower:
-            raise ViralFetchError("Rate limit od TikToka/IG. Sprobuj za 5-10 min.")
-        if "unsupported url" in msg_lower:
-            raise ViralFetchError(
-                f"yt-dlp nie obsluguje tego typu URL ({clean_url}). "
-                "Mozliwe przyczyny: (1) yt-dlp na produkcji jest stary — sprawdz w Streamlit Cloud "
-                "czy requirements.txt wymusza yt-dlp>=2025.1.15. (2) URL ma nietypowy format — "
-                "sprobuj wkleic 'czysty' link bez parametrow, np. https://www.tiktok.com/@user/photo/123 "
-                "(bez '?is_from_webapp=...'). (3) Post moze byc geo-blocked."
-            )
         if "geo" in msg_lower or "country" in msg_lower:
             raise ViralFetchError("Post jest zablokowany w tym regionie (geo-block).")
-        raise ViralFetchError(f"yt-dlp blad: {msg[:300]}")
+        if "rate" in msg_lower or "429" in msg_lower or "too many" in msg_lower:
+            # Yt-dlp moze byc rate-limited, ale TikWM ma osobny limit — sprobujmy
+            pass
 
-    if not info:
-        raise ViralFetchError("yt-dlp nie zwrocil danych.")
+        # Dla bledow typu "Unsupported URL" lub innych nie-fatalnych —
+        # spadamy nizej do TikWM fallback (dla TikTok)
 
-    platform = _detect_platform(clean_url)
+    # ── TIKWM FALLBACK dla TikTok ──
+    # Wlacza sie gdy yt-dlp padl LUB nie zwrocil obrazow,
+    # ale tylko dla URLi tiktok.com (TikWM nie obsluguje IG)
+    use_tikwm_fallback = (
+        platform == "tiktok"
+        and (info is None or not (info.get("entries") or info.get("formats") or info.get("thumbnails")))
+    )
+
+    if use_tikwm_fallback:
+        try:
+            tikwm_data = _fetch_via_tikwm(clean_url)
+            return {
+                "platform": "tiktok",
+                "caption": tikwm_data["caption"],
+                "hashtags": tikwm_data["hashtags"],
+                "images_bytes": tikwm_data["images_bytes"],
+                "is_carousel": tikwm_data["is_carousel"],
+                "original_url": clean_url,
+                "raw_meta": {
+                    **tikwm_data["raw_meta"],
+                    "_source": "tikwm_fallback",
+                    "_yt_dlp_error": (yt_dlp_error or "")[:200],
+                },
+            }
+        except ViralFetchError as tikwm_err:
+            # Oba zawiodly — zwroc lepszy z bledow
+            primary = yt_dlp_error or "yt-dlp nie zwrocil obrazow"
+            raise ViralFetchError(
+                f"Oba scrapery padly. yt-dlp: {primary[:200]}. TikWM: {tikwm_err}"
+            )
+
+    # Yt-dlp padl bez fallbacku (Instagram lub jakis inny case)
+    if info is None:
+        msg_lower = (yt_dlp_error or "").lower()
+        if "unsupported url" in msg_lower:
+            raise ViralFetchError(
+                f"yt-dlp nie obsluguje tego URL ({clean_url}). "
+                "Sprobuj wkleic 'czysty' link bez parametrow."
+            )
+        raise ViralFetchError(f"yt-dlp blad: {(yt_dlp_error or 'nieznany')[:300]}")
     caption = info.get("description") or info.get("title") or ""
     hashtags = re.findall(r"#\w+", caption)
 
@@ -225,6 +262,87 @@ def _download_image(url: str, timeout: int = 15) -> Optional[bytes]:
     except Exception:
         return None
     return None
+
+
+# ─────────────────────────────────────────────────────────────
+# TIKWM FALLBACK — darmowy publiczny API dla TikTok photo+video
+# ─────────────────────────────────────────────────────────────
+# Uzywamy gdy yt-dlp pada na 'Unsupported URL' (zwykle TikTok /photo/)
+# lub na innym ekstraktor-spec'ficznym bledzie.
+
+def _fetch_via_tikwm(url: str) -> dict:
+    """
+    Pobiera dane TikToka przez darmowe TikWM API (bez auth).
+    Obsluguje zarowno photo carousele jak i wideo (cover frame).
+
+    Zwraca: {caption, hashtags, images_bytes, is_carousel, raw_meta}
+    Rzuca ViralFetchError przy bledach.
+    """
+    api_url = f"https://www.tikwm.com/api/?url={urllib.parse.quote(url, safe='')}"
+    try:
+        r = requests.get(api_url, timeout=20, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+    except requests.RequestException as e:
+        raise ViralFetchError(f"TikWM API niedostepne: {e}")
+
+    if r.status_code == 429:
+        raise ViralFetchError("TikWM rate limit (zbyt wiele zapytan). Sprobuj za 2-3 min.")
+    if not r.ok:
+        raise ViralFetchError(f"TikWM HTTP {r.status_code}: {r.text[:200]}")
+
+    try:
+        data = r.json()
+    except Exception:
+        raise ViralFetchError(f"TikWM zwrocil nie-JSON: {r.text[:200]}")
+
+    if data.get("code") != 0:
+        msg = data.get("msg") or "unknown"
+        raise ViralFetchError(f"TikWM odrzucil URL: {msg}")
+
+    info = data.get("data") or {}
+    caption = info.get("title") or ""
+    hashtags = re.findall(r"#\w+", caption)
+
+    images_bytes: list[bytes] = []
+    is_carousel = False
+
+    images = info.get("images")
+    if images and isinstance(images, list):
+        is_carousel = True
+        for img_url in images[:10]:
+            content = _download_image(img_url)
+            if content:
+                images_bytes.append(content)
+    else:
+        # Wideo — cover frame
+        cover_url = (
+            info.get("cover")
+            or info.get("origin_cover")
+            or info.get("ai_dynamic_cover")
+        )
+        if cover_url:
+            content = _download_image(cover_url)
+            if content:
+                images_bytes.append(content)
+
+    if not images_bytes:
+        raise ViralFetchError("TikWM zwrocil metadata ale bez URL obrazow.")
+
+    author = (info.get("author") or {})
+    return {
+        "caption": caption,
+        "hashtags": hashtags,
+        "images_bytes": images_bytes,
+        "is_carousel": is_carousel,
+        "raw_meta": {
+            "title": (info.get("title") or "")[:200],
+            "uploader": author.get("unique_id") or author.get("nickname") or "",
+            "duration": info.get("duration"),
+            "view_count": info.get("play_count"),
+            "like_count": info.get("digg_count"),
+        },
+    }
 
 
 # ─────────────────────────────────────────────────────────────
