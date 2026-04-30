@@ -378,12 +378,26 @@ def analyze_and_replicate(viral_data: dict, brief: dict, style: Optional[dict] =
             "revenue to $50/$100). Display as '$X', never PLN/zł.\n"
             "- DASHES: only plain hyphen-minus '-'. NEVER em-dash '—' or en-dash '–'."
         )
+        # CTA: jezeli brief.cta_text jest po polsku, przetlumacz go na naturalny EN
+        if cta_text:
+            cta_text_instruction = (
+                f"- cta_text z briefa: \"{cta_text}\" (PO POLSKU). "
+                f"PRZETLUMACZ go na naturalny angielski zachowujac intencje "
+                f"(np. 'Klik link w bio' → 'Link in bio', 'Sprawdz oferte' → 'Check the offer', "
+                f"'Sprawdz w bio' → 'Check bio'). NIE zostawiaj polskiego tekstu w EN karuzeli."
+            )
+        else:
+            cta_text_instruction = "- cta_text: brak w briefie — uzyj generycznego EN, np. 'Link in bio' / 'Check it out'"
     else:
         lang_block = (
             "- LANGUAGE: POLSKI z poprawnymi diakrytykami (ą ę ó ł ś ć ż ź ń).\n"
             "- WALUTA: kwoty zostaja w PLN.\n"
             "- MYSLNIKI: tylko zwykly dywiz '-', nigdy '—' ani '–'."
         )
+        if cta_text:
+            cta_text_instruction = f"- cta_text: \"{cta_text}\" (uzyj 1:1 lub naturalnie zaadaptuj do kontekstu)"
+        else:
+            cta_text_instruction = "- cta_text: brak w briefie — uzyj generycznego po polsku, np. 'Klik link w bio'"
 
     user_prompt = f"""Otrzymujesz {images_count} {'slajdow karuzeli' if is_carousel else 'kadr (cover frame wideo)'} viralu z {platform.upper()}.
 
@@ -413,8 +427,8 @@ ZADANIE:
      NIE rozwleklaj tylko bo brand brief ma duzo USPs
 
 5. CTA na ostatnim slajdzie MUSI uzyc:
-   - cta_text: "{cta_text or '(uzyj generycznego, np. Klik link w bio)'}"
-   - cta_url: "{cta_url or '(brak — uzyj generycznego CTA bez linku)'}"
+   {cta_text_instruction}
+   - cta_url (link, zostaje 1:1 niezaleznie od jezyka): "{cta_url or '(brak — uzyj generycznego CTA bez linku)'}"
 
 6. Zaadaptuj liczbe slajdow do {images_count if is_carousel else '7-9 (poniewaz oryginal byl wideo, sam zaprojektuj)'}.
 
