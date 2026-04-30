@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS carousels (
     ig_post_id TEXT,
     tt_post_id TEXT,
     insights TEXT,               -- JSON {"ig":{...},"tt":{...}}
+    source TEXT,                 -- 'manual' | 'automation' | 'viral_replicator'
+    source_url TEXT,             -- URL viralu (gdy source='viral_replicator')
     created_at TEXT NOT NULL,
     FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE,
     FOREIGN KEY (style_id) REFERENCES style_profiles(id) ON DELETE SET NULL,
@@ -211,7 +213,11 @@ def _migrate_brand_briefs(conn):
 def _migrate_carousels(conn):
     """Dodaje brakujące kolumny do carousels dla starszych baz."""
     existing = {r["name"] for r in conn.execute("PRAGMA table_info(carousels)").fetchall()}
-    new_cols = {"publer_post_id": "TEXT"}
+    new_cols = {
+        "publer_post_id": "TEXT",
+        "source": "TEXT",          # 'manual' | 'automation' | 'viral_replicator'
+        "source_url": "TEXT",      # URL viralu gdy source='viral_replicator'
+    }
     for col, col_type in new_cols.items():
         if col not in existing:
             try:
