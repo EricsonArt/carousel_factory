@@ -977,6 +977,36 @@ def _render_slide_regen_editor(carousel: dict, slide_index: int):
         if last_done and last_done["status"] == "error":
             st.error(f"❌ Błąd: {last_done['error']}")
 
+        # ── Usun slajd (z confirm zeby nie kliknac przypadkiem) ────────────
+        st.markdown("---")
+        del_armed_key = f"{kp}_del_armed"
+        if not st.session_state.get(del_armed_key, False):
+            if st.button("🗑️ Usuń ten slajd", key=f"{kp}_del",
+                          use_container_width=True,
+                          help="Usuwa slajd z karuzeli i kasuje pliki z dysku."):
+                st.session_state[del_armed_key] = True
+                st.rerun()
+        else:
+            st.warning("⚠️ Na pewno usunąć slajd? Tej akcji nie można cofnąć.")
+            col_y, col_n = st.columns(2)
+            with col_y:
+                if st.button("✓ Tak, usuń", key=f"{kp}_del_yes",
+                              type="primary", use_container_width=True):
+                    try:
+                        from core.carousel_generator import delete_slide
+                        delete_slide(car_id, slide_index)
+                        st.session_state[del_armed_key] = False
+                        st.toast("🗑️ Slajd usunięty", icon="✅")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+                        st.session_state[del_armed_key] = False
+            with col_n:
+                if st.button("✗ Anuluj", key=f"{kp}_del_no",
+                              use_container_width=True):
+                    st.session_state[del_armed_key] = False
+                    st.rerun()
+
 
 def _show_carousel_preview(carousel: dict):
     st.markdown('<hr>', unsafe_allow_html=True)

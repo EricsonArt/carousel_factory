@@ -259,6 +259,46 @@ def _normalize_copy_text(copy_data: dict, language: str = "pl") -> dict:
 # STEP 2: IMAGE GENERATION + STEP 3: PILLOW OVERLAY
 # ─────────────────────────────────────────────────────────────
 
+def delete_slide(carousel_id: str, slide_index: int) -> dict:
+    """
+    Usuwa pojedynczy slajd z karuzeli — z bazy + pliki z dysku
+    (image + background). Pozostale slajdy zostaja, indeksy sie przesuwaja.
+    """
+    from db import get_carousel
+
+    carousel = get_carousel(carousel_id)
+    if not carousel:
+        raise ValueError(f"Karuzela {carousel_id} nie istnieje")
+
+    slides = list(carousel.get("slides", []))
+    if slide_index < 0 or slide_index >= len(slides):
+        raise ValueError(f"Slajd {slide_index} poza zakresem (0..{len(slides)-1})")
+
+    if len(slides) <= 1:
+        raise ValueError("Nie mozna usunac ostatniego slajdu — usun cala karuzele zamiast tego.")
+
+    deleted = slides.pop(slide_index)
+
+    # Skasuj pliki z dysku (best-effort, bledy ignorowane)
+    img_path_str = deleted.get("image_path") or ""
+    if img_path_str:
+        img_path = Path(img_path_str)
+        try:
+            if img_path.exists():
+                img_path.unlink()
+        except Exception:
+            pass
+        bg_path = img_path.parent / f"{img_path.stem}_bg{img_path.suffix}"
+        try:
+            if bg_path.exists():
+                bg_path.unlink()
+        except Exception:
+            pass
+
+    update_carousel(carousel_id, slides=slides)
+    return get_carousel(carousel_id)
+
+
 def regenerate_single_slide(
     carousel_id: str,
     slide_index: int,
