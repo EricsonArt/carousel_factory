@@ -299,6 +299,10 @@ def regenerate_single_slide(
 
     if new_headline is not None:
         slide["headline"] = _strip_emojis(new_headline)
+        # User wpisal recznie headline — ignoruj 'hide_headline_first_two' z brand prefs.
+        # Inaczej Pillow czyscil by headline na slajdach 1/2 niezaleznie od tego co user wpisuje,
+        # i tekst sie po prostu NIE pojawil — co user widzial w bugu.
+        effective_text_settings = {**effective_text_settings, "hide_headline_first_two": False}
     if new_body is not None:
         slide["body"] = _strip_emojis(new_body)
 
