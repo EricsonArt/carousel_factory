@@ -19,7 +19,7 @@ from core.bulk_reschedule import bulk_reschedule
 from config import PUBLER_API_KEY, PUBLER_WORKSPACE_ID
 from db import list_carousels, get_carousel, get_automation_config
 from ui.theme import page_header, section_title, empty_state
-from ui.generate import show_publer_section
+from ui.generate import show_publer_section, _render_slide_regen_editor
 
 
 _STATUS_COLORS = {
@@ -480,6 +480,9 @@ def render_history(brand_id: str):
                         if headline:
                             st.markdown(f'<div style="font-size:0.7rem;color:#64748B;margin-top:0.2rem;line-height:1.3;">{headline}</div>',
                                         unsafe_allow_html=True)
+
+                        # Editor: zmiana tekstu / regeneracja obrazu pojedynczego slajdu
+                        _render_slide_regen_editor(c, i)
 
             st.markdown('<div style="margin-top:0.75rem;"></div>', unsafe_allow_html=True)
 
