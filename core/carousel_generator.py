@@ -64,6 +64,7 @@ def generate_copy(
     slide_count: int = DEFAULT_SLIDES,
     language: str = "pl",
     text_length: str = "medium",
+    custom_instructions: str = "",
 ) -> dict:
     """
     Generuje cala karuzele tekstowa (slides + caption + hashtags).
@@ -137,13 +138,21 @@ WAZNE (viral_loop):
         process_block = ""
         max_tokens = 6000
 
+    custom_block = ""
+    if custom_instructions and custom_instructions.strip():
+        custom_block = (
+            "\n🎯 DODATKOWE INSTRUKCJE OD UŻYTKOWNIKA (PRIORYTET — stosuj się do tego nawet gdy "
+            "kłóci się z innymi regułami, chyba że łamie 'forbidden_claims' z briefa):\n"
+            f"{custom_instructions.strip()}\n"
+        )
+
     prompt = f"""Stworz MAKSYMALNIE WIRALOWA karuzele Instagram/TikTok na temat:
 "{topic}"
 
 PARAMETRY:
 - Liczba slajdow: {slide_count} (dokladnie tyle)
 {language_directive}
-{length_block}
+{length_block}{custom_block}
 BRIEF MARKI:
 {json.dumps(brief, ensure_ascii=False, indent=2)}
 {style_section}{process_block}
@@ -250,6 +259,77 @@ def _normalize_copy_text(copy_data: dict, language: str = "pl") -> dict:
 # STEP 2: IMAGE GENERATION + STEP 3: PILLOW OVERLAY
 # ─────────────────────────────────────────────────────────────
 
+def regenerate_single_slide(
+    carousel_id: str,
+    slide_index: int,
+    image_instructions: str = "",
+    new_headline: Optional[str] = None,
+    new_body: Optional[str] = None,
+) -> dict:
+    """
+    Regeneruje pojedynczy slajd:
+    - obraz (AI z dodatkowymi instrukcjami)
+    - opcjonalnie zmienia headline/body
+    - nakłada tekst Pillow overlay
+    Zwraca zaktualizowany dict karuzeli.
+    """
+    from db import get_carousel
+    from core.viral_replicator import _strip_emojis
+
+    carousel = get_carousel(carousel_id)
+    if not carousel:
+        raise ValueError(f"Karuzela {carousel_id} nie istnieje")
+
+    slides = list(carousel.get("slides", []))
+    if slide_index < 0 or slide_index >= len(slides):
+        raise ValueError(f"Slajd {slide_index} poza zakresem (0..{len(slides)-1})")
+
+    slide = dict(slides[slide_index])
+    brand_id = carousel.get("brand_id")
+    style_id = carousel.get("style_id")
+
+    brief = get_brief(brand_id) or {}
+    style = get_style(style_id) if style_id else None
+    effective_text_settings = merge_text_settings(brief.get("text_settings"))
+
+    if new_headline is not None:
+        slide["headline"] = _strip_emojis(new_headline)
+    if new_body is not None:
+        slide["body"] = _strip_emojis(new_body)
+
+    # Wybierz providera ktory dzialal poprzednio (lub default Gemini)
+    prev_provider = (slide.get("image_provider") or "").strip()
+    if prev_provider in ("gemini", "openai"):
+        prefer_provider = prev_provider
+    elif prev_provider.startswith("fallback") or prev_provider in ("local", "error", ""):
+        prefer_provider = "gemini"  # default na najlepszy darmowy
+    else:
+        prefer_provider = prev_provider or "gemini"
+
+    output_path = Path(slide.get("image_path") or
+                        (CAROUSELS_DIR / brand_id / carousel_id /
+                         f"{slide_index+1:02d}_regen.jpg"))
+
+    img_meta = render_slide_image(
+        slide, style, output_path,
+        use_ai_images=True,
+        prefer_provider=prefer_provider,
+        image_quality="low",
+        text_mode="overlay",
+        slide_index=slide_index,
+        text_settings=effective_text_settings,
+        image_custom_instructions=image_instructions,
+    )
+
+    slide["image_path"] = img_meta["image_path"]
+    slide["image_provider"] = img_meta["image_provider"]
+    slide["image_model"] = img_meta["image_model"]
+    slides[slide_index] = slide
+
+    update_carousel(carousel_id, slides=slides)
+    return get_carousel(carousel_id)
+
+
 def render_slide_image(
     slide: dict,
     style: Optional[dict],
@@ -261,6 +341,7 @@ def render_slide_image(
     text_mode: str = "overlay",
     slide_index: int = 0,
     text_settings: Optional[dict] = None,
+    image_custom_instructions: str = "",
 ) -> dict:
     """
     Generuje obraz tla + tekst.
@@ -287,6 +368,13 @@ def render_slide_image(
 
     if use_ai_images:
         image_prompt = slide.get("image_prompt", "")
+        # Per-slajd custom instructions od usera dolaczone do image_prompt
+        slide_custom = (slide.get("_image_custom_instructions") or "").strip()
+        global_custom = (image_custom_instructions or "").strip()
+        if global_custom:
+            image_prompt = f"{image_prompt}. User instructions: {global_custom}".strip(". ")
+        if slide_custom:
+            image_prompt = f"{image_prompt}. Specific for this slide: {slide_custom}".strip(". ")
         style_hint = ""
         refs = []
         if style:
@@ -408,6 +496,8 @@ def generate_carousel(
     text_mode: str = "overlay",
     text_settings: Optional[dict] = None,
     progress_callback=None,
+    custom_instructions: str = "",
+    image_custom_instructions: str = "",
 ) -> dict:
     """
     Pelny pipeline:
@@ -434,7 +524,8 @@ def generate_carousel(
         progress_callback("Generuje tekst karuzeli...", 0.1)
 
     copy_data = generate_copy(topic, brief, style, slide_count,
-                               language=language, text_length=text_length)
+                               language=language, text_length=text_length,
+                               custom_instructions=custom_instructions)
 
     if progress_callback:
         progress_callback("Walidacja zgodnosci z briefem...", 0.25)
@@ -472,6 +563,7 @@ def generate_carousel(
                 text_mode=text_mode,
                 slide_index=i,
                 text_settings=effective_text_settings,
+                image_custom_instructions=image_custom_instructions,
             )
         except Exception as e:
             img_meta = {

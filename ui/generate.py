@@ -81,6 +81,8 @@ def _run_generation_job(jobs: dict, job_id: str, brand_id: str, params: dict):
             text_mode=params.get("text_mode", "overlay"),
             text_settings=params.get("text_settings"),
             progress_callback=cb,
+            custom_instructions=params.get("custom_instructions", ""),
+            image_custom_instructions=params.get("image_custom_instructions", ""),
         )
         jobs[job_id]["carousel"] = carousel
         jobs[job_id]["status"] = "done"
@@ -143,6 +145,8 @@ def _run_viral_job(jobs: dict, job_id: str, brand_id: str, params: dict):
             text_settings=params.get("text_settings"),
             progress_callback=cb,
             clone_visual=params.get("clone_visual", False),
+            custom_instructions=params.get("custom_instructions", ""),
+            image_custom_instructions=params.get("image_custom_instructions", ""),
         )
         jobs[job_id]["carousel"] = carousel
         jobs[job_id]["status"] = "done"
@@ -760,6 +764,39 @@ def render_generate(brand_id: str):
             st.caption("⚠️ Tryb 'AI wbudowany' wymaga generatora AI (Nano Banana / GPT Image). Wybierz model wyżej.")
         if text_mode == "inline" and language == "pl":
             st.caption("⚠️ AI inline + język polski = ryzyko zmasakrowanych ą/ę/ś/ć. Dla polskiego bezpieczniej zostać przy Pillow.")
+
+        st.markdown('<div style="margin-top:0.75rem;"></div>', unsafe_allow_html=True)
+
+        # Custom instructions — wieksza kontrola dla usera
+        gen_custom_text = st.text_area(
+            "📝 Dodatkowe instrukcje dla AI — TEKST (opcjonalne)",
+            value="",
+            height=85,
+            placeholder=(
+                "Co AI ma uwzględnić, czego unikać, na co uważać. Przykłady:\n"
+                "• 'nie używaj słów darmo / gratis'\n"
+                "• 'każdy slajd ma kończyć się pytaniem'\n"
+                "• 'unikaj clickbaitu, bądź konkretny'\n"
+                "• 'nie wymieniaj nazw konkurencji'"
+            ),
+            key="gen_custom_text",
+            help="Te instrukcje dostają WYŻSZY priorytet niż domyślne reguły. NIE łamią forbidden_claims z briefa.",
+        )
+
+        gen_custom_image = st.text_area(
+            "🎨 Dodatkowe instrukcje dla AI — OBRAZY (opcjonalne)",
+            value="",
+            height=85,
+            placeholder=(
+                "Co zmienić w obrazach AI. Przykłady:\n"
+                "• 'tła ciemne, dużo cieni'\n"
+                "• 'nie generuj twarzy ludzi, tylko sylwetki/cienie'\n"
+                "• 'styl polaroid, instax, organic feel'\n"
+                "• 'cinematic, anamorphic lens flare'"
+            ),
+            key="gen_custom_image",
+        )
+
         submitted = st.form_submit_button("🎠 Generuj karuzelę", type="primary", use_container_width=True)
 
     if submitted:
@@ -778,6 +815,8 @@ def render_generate(brand_id: str):
             "language": language,
             "text_mode": text_mode,
             "text_settings": st.session_state.get("generate_text_settings"),
+            "custom_instructions": gen_custom_text,
+            "image_custom_instructions": gen_custom_image,
         })
         st.success(
             f"✅ Karuzela ruszyła w tle (job `{job_id}`). "
@@ -785,6 +824,118 @@ def render_generate(brand_id: str):
             f"Postęp widoczny w panelu na górze strony."
         )
         st.rerun()
+
+
+def _get_regen_jobs() -> dict:
+    return st.session_state.setdefault("slide_regen_jobs", {})
+
+
+def _start_slide_regen_job(carousel_id: str, slide_index: int,
+                              image_instructions: str,
+                              new_headline: str, new_body: str) -> str:
+    jobs = _get_regen_jobs()
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {
+        "id": job_id,
+        "carousel_id": carousel_id,
+        "slide_index": slide_index,
+        "status": "running",
+        "stage": "Regeneracja slajdu...",
+        "started_at": time.time(),
+        "finished_at": None,
+        "result": None,
+        "error": None,
+    }
+    thread = threading.Thread(
+        target=_run_slide_regen_job,
+        args=(jobs, job_id, carousel_id, slide_index, image_instructions, new_headline, new_body),
+        daemon=True,
+    )
+    add_script_run_ctx(thread)
+    thread.start()
+    return job_id
+
+
+def _run_slide_regen_job(jobs: dict, job_id: str, carousel_id: str,
+                           slide_index: int, image_instructions: str,
+                           new_headline: str, new_body: str):
+    try:
+        from core.carousel_generator import regenerate_single_slide
+        new_h = new_headline if new_headline.strip() else None
+        new_b = new_body if new_body.strip() else None
+        result = regenerate_single_slide(
+            carousel_id=carousel_id,
+            slide_index=slide_index,
+            image_instructions=image_instructions,
+            new_headline=new_h,
+            new_body=new_b,
+        )
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["result"] = result
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["traceback"] = traceback.format_exc()
+    finally:
+        jobs[job_id]["finished_at"] = time.time()
+
+
+def _render_slide_regen_editor(carousel: dict, slide_index: int):
+    """Inline editor pod kazdym slajdem: zmiana tekstu + regeneracja obrazu."""
+    car_id = carousel["id"]
+    slide = carousel["slides"][slide_index]
+    kp = f"regen_{car_id}_{slide_index}"
+
+    # Sprawdz czy juz jakis regen-job lecial dla tego slajdu
+    regen_jobs = _get_regen_jobs()
+    my_jobs = [j for j in regen_jobs.values()
+                if j["carousel_id"] == car_id and j["slide_index"] == slide_index]
+    active = next((j for j in my_jobs if j["status"] == "running"), None)
+    last_done = next((j for j in sorted(my_jobs, key=lambda x: x["started_at"], reverse=True)
+                       if j["status"] in ("done", "error")), None)
+
+    if active:
+        st.info(f"🎨 Regeneruję slajd... ({int(time.time() - active['started_at'])}s)")
+        return
+
+    with st.expander("✏️ Popraw ten slajd", expanded=False):
+        new_h = st.text_input(
+            "Nowy headline (puste = bez zmian)",
+            value="",
+            key=f"{kp}_h",
+            placeholder=slide.get("headline", "")[:60],
+        )
+        new_b = st.text_input(
+            "Nowy body (puste = bez zmian)",
+            value="",
+            key=f"{kp}_b",
+            placeholder=(slide.get("body", "") or "")[:80],
+        )
+        img_inst = st.text_area(
+            "🎨 Co zmienić w obrazie?",
+            value="",
+            height=70,
+            key=f"{kp}_img",
+            placeholder=(
+                "np. 'więcej kontrastu, ciemniejsze tło' / "
+                "'bez ludzi' / 'inna kompozycja, tekst po prawej'"
+            ),
+        )
+
+        if st.button("🔄 Regeneruj slajd", key=f"{kp}_btn", type="primary",
+                      use_container_width=True):
+            if not (img_inst.strip() or new_h.strip() or new_b.strip()):
+                st.warning("Podaj co najmniej jedną zmianę (tekst lub instrukcje dla obrazu).")
+            else:
+                _start_slide_regen_job(car_id, slide_index, img_inst, new_h, new_b)
+                st.success("Job ruszył w tle — odśwież za chwilę.")
+                st.rerun()
+
+        if last_done:
+            if last_done["status"] == "done":
+                st.success("✅ Slajd zregenerowany. Odśwież widok.")
+            elif last_done["status"] == "error":
+                st.error(f"❌ Błąd: {last_done['error']}")
 
 
 def _show_carousel_preview(carousel: dict):
@@ -861,6 +1012,9 @@ def _show_carousel_preview(carousel: dict):
                     {'<div style="font-size:0.72rem;color:#64748B;margin-top:0.2rem;">' + slide.get('body', '')[:80] + '...</div>' if slide.get('body') else ''}
                 </div>
                 """, unsafe_allow_html=True)
+
+                # Popraw ten slajd — inline editor z custom instructions
+                _render_slide_regen_editor(carousel, i)
 
     # Caption + hashtags
     section_title("Caption i hashtagi", icon="✍️")
@@ -1262,6 +1416,36 @@ def _render_viral_replicator_section(brand_id: str, brief: dict, styles: list):
             ),
         )
 
+        # Custom instructions od usera — większa kontrola
+        v_custom_text = st.text_area(
+            "📝 Dodatkowe instrukcje dla AI — TEKST (opcjonalne)",
+            value="",
+            height=85,
+            placeholder=(
+                "Co AI ma uwzględnić, czego unikać, na co uważać. Przykłady:\n"
+                "• 'nie używaj słowa darmo'\n"
+                "• 'dodaj liczby do każdego nagłówka'\n"
+                "• 'CTA ma być bardziej agresywny, w stylu \"OSTATNIE 24H\"'\n"
+                "• 'nie zmieniaj słowa z viralu o pieniądzach na walutę USD'"
+            ),
+            key="viral_custom_text",
+            help="Te instrukcje dostają WYŻSZY priorytet niż domyślne reguły system promptu.",
+        )
+
+        v_custom_image = st.text_area(
+            "🎨 Dodatkowe instrukcje dla AI — OBRAZY (opcjonalne)",
+            value="",
+            height=85,
+            placeholder=(
+                "Co zmienić w obrazach AI. Przykłady:\n"
+                "• 'tła w odcieniach niebieskiego, mniej saturacji'\n"
+                "• 'nie generuj ludzi'\n"
+                "• 'dodaj subtle grain effect, vintage look'\n"
+                "• 'minimalistyczne, dużo białej przestrzeni'"
+            ),
+            key="viral_custom_image",
+        )
+
         v_submitted = st.form_submit_button("🎬 Replikuj viralu", type="primary", use_container_width=True)
 
     if v_submitted:
@@ -1283,6 +1467,8 @@ def _render_viral_replicator_section(brand_id: str, brief: dict, styles: list):
             "language": v_language,
             "text_settings": st.session_state.get("generate_text_settings"),
             "clone_visual": v_clone_visual,
+            "custom_instructions": v_custom_text,
+            "image_custom_instructions": v_custom_image,
         })
         st.success(
             f"✅ Replikacja ruszyła w tle (job `{job_id}`). yt-dlp pobiera viralu, "

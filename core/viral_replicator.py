@@ -588,7 +588,8 @@ def _build_tool_schema(clone_visual: bool, expected_slide_count: int) -> dict:
 
 def analyze_and_replicate(viral_data: dict, brief: dict, style: Optional[dict] = None,
                             language: str = "pl", clone_visual: bool = False,
-                            debug_dump_path: Optional[Path] = None) -> dict:
+                            debug_dump_path: Optional[Path] = None,
+                            custom_instructions: str = "") -> dict:
     """
     Wywoluje Claude Vision z slajdami viralu + briefem usera.
     Uzywa Tool Use ktore WYMUSI po stronie API obecnosc wszystkich pol schematu.
@@ -640,6 +641,13 @@ def analyze_and_replicate(viral_data: dict, brief: dict, style: Optional[dict] =
 
     brief_name = (brief.get("brand_name") or brief.get("name") or "").strip()
     brief_product = (brief.get("product") or "").strip()[:200]
+
+    custom_block = ""
+    if custom_instructions and custom_instructions.strip():
+        custom_block = (
+            "\n🎯 DODATKOWE INSTRUKCJE OD UŻYTKOWNIKA (PRIORYTET — stosuj się do tego):\n"
+            f"{custom_instructions.strip()}\n"
+        )
 
     if clone_visual:
         visual_block = (
@@ -731,7 +739,7 @@ ZADANIE:
 5. Liczba slajdów = {images_count if is_carousel else 'dobierz 7-9 (wideo → zaprojektuj strukturę)'} oryginalnych + 1 CTA.
 
 {("6. ⚠️ PRZYPOMNIENIE: clone_visual_style jest WŁĄCZONE — KAŻDY slajd musi mieć pole viral_visual ze WSZYSTKIMI 9 polami wypełnionymi (patrz instrukcja na górze)." if clone_visual else "")}
-
+{custom_block}
 WYMAGANIA TECHNICZNE:
 {lang_block}
 
@@ -813,6 +821,8 @@ def replicate_viral_carousel(
     text_settings: Optional[dict] = None,
     progress_callback=None,
     clone_visual: bool = False,
+    custom_instructions: str = "",
+    image_custom_instructions: str = "",
 ) -> dict:
     """
     Pelny pipeline replikacji viralu.
@@ -844,6 +854,7 @@ def replicate_viral_carousel(
         language=language,
         clone_visual=clone_visual,
         debug_dump_path=debug_dump_path,
+        custom_instructions=custom_instructions,
     )
 
     # JSON mapping: replicated_carousel jest zagniezdzony, splaszczamy
@@ -919,6 +930,7 @@ def replicate_viral_carousel(
                 image_quality=image_quality,
                 model_override=model_override,
                 text_settings=slide_text_settings,
+                image_custom_instructions=image_custom_instructions,
             )
         except Exception as e:
             img_meta = {
@@ -992,7 +1004,8 @@ def _render_replicated_slide(slide: dict, style: Optional[dict], output_path: Pa
                               slide_index: int, use_ai_images: bool,
                               prefer_provider: Optional[str], image_quality: str,
                               model_override: Optional[str],
-                              text_settings: dict) -> dict:
+                              text_settings: dict,
+                              image_custom_instructions: str = "") -> dict:
     """Reuse logiki carousel_generator: image gen + Pillow overlay."""
     from PIL import Image
     from core.carousel_generator import _gradient_background_with_palette
@@ -1001,6 +1014,14 @@ def _render_replicated_slide(slide: dict, style: Optional[dict], output_path: Pa
     body = slide.get("body", "")
     image_focus = slide.get("image_focus", "center")
     image_prompt = slide.get("image_prompt", "")
+
+    # Per-slajd + globalne custom instructions od usera dolaczone do image_prompt
+    slide_custom = (slide.get("_image_custom_instructions") or "").strip()
+    global_custom = (image_custom_instructions or "").strip()
+    if global_custom:
+        image_prompt = f"{image_prompt}. User instructions: {global_custom}".strip(". ")
+    if slide_custom:
+        image_prompt = f"{image_prompt}. Specific for this slide: {slide_custom}".strip(". ")
 
     if use_ai_images:
         style_hint = ""
