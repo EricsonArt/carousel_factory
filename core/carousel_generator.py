@@ -265,16 +265,21 @@ def regenerate_single_slide(
     image_instructions: str = "",
     new_headline: Optional[str] = None,
     new_body: Optional[str] = None,
+    regenerate_image: bool = True,
 ) -> dict:
     """
     Regeneruje pojedynczy slajd:
-    - obraz (AI z dodatkowymi instrukcjami)
-    - opcjonalnie zmienia headline/body
-    - nakłada tekst Pillow overlay
-    Zwraca zaktualizowany dict karuzeli.
+    - regenerate_image=True  -> nowy obraz AI + nowy tekst (Pillow overlay)
+    - regenerate_image=False -> ZACHOWAJ obecny obraz, zmieniaj TYLKO tekst
+                                (laduje *_bg.jpg, naklada nowy tekst, zapisuje
+                                z nowa nazwa zeby Streamlit nie cache'owal starego)
+    Jak nie ma backgrounda na dysku (stara karuzela) -> robi pelny regen.
     """
+    import time as _time
     from db import get_carousel
     from core.viral_replicator import _strip_emojis
+    from core.text_renderer import apply_text_to_image
+    from PIL import Image as _PIL
 
     carousel = get_carousel(carousel_id)
     if not carousel:
@@ -297,35 +302,68 @@ def regenerate_single_slide(
     if new_body is not None:
         slide["body"] = _strip_emojis(new_body)
 
-    # Wybierz providera ktory dzialal poprzednio (lub default Gemini)
-    prev_provider = (slide.get("image_provider") or "").strip()
-    if prev_provider in ("gemini", "openai"):
-        prefer_provider = prev_provider
-    elif prev_provider.startswith("fallback") or prev_provider in ("local", "error", ""):
-        prefer_provider = "gemini"  # default na najlepszy darmowy
-    else:
-        prefer_provider = prev_provider or "gemini"
-
-    output_path = Path(slide.get("image_path") or
-                        (CAROUSELS_DIR / brand_id / carousel_id /
-                         f"{slide_index+1:02d}_regen.jpg"))
-
-    img_meta = render_slide_image(
-        slide, style, output_path,
-        use_ai_images=True,
-        prefer_provider=prefer_provider,
-        image_quality="low",
-        text_mode="overlay",
-        slide_index=slide_index,
-        text_settings=effective_text_settings,
-        image_custom_instructions=image_instructions,
+    current_path = Path(slide.get("image_path") or "")
+    bg_path = current_path.parent / f"{current_path.stem}_bg{current_path.suffix}" if current_path.parts else None
+    can_text_only = (
+        not regenerate_image
+        and bg_path is not None
+        and bg_path.exists()
     )
 
-    slide["image_path"] = img_meta["image_path"]
-    slide["image_provider"] = img_meta["image_provider"]
-    slide["image_model"] = img_meta["image_model"]
-    slides[slide_index] = slide
+    if can_text_only:
+        # TYLKO TEKST: laduj background, naklad nowy text overlay, zapisz pod nowa nazwa
+        bg_img = _PIL.open(bg_path).convert("RGB")
+        new_img = apply_text_to_image(
+            bg_img,
+            slide.get("headline", ""),
+            slide.get("body", ""),
+            slide_index=slide_index,
+            text_settings=effective_text_settings,
+            image_focus_hint=slide.get("image_focus", "center"),
+        )
+        # Cache busting: nowa nazwa pliku z timestampem zeby Streamlit przeladowal
+        ts = int(_time.time())
+        base_name = current_path.stem.split("_t")[0]  # usun stary _tXXX suffix
+        new_filename = f"{base_name}_t{ts}{current_path.suffix}"
+        new_path = current_path.parent / new_filename
+        new_img.save(new_path, "JPEG", quality=92)
+        slide["image_path"] = str(new_path)
+        # provider/model zostaja takie same — obraz tla sie nie zmienil
+    else:
+        # PELNY REGEN: nowy obraz AI + nowy tekst
+        prev_provider = (slide.get("image_provider") or "").strip()
+        if prev_provider in ("gemini", "openai"):
+            prefer_provider = prev_provider
+        elif prev_provider.startswith("fallback") or prev_provider in ("local", "error", ""):
+            prefer_provider = "gemini"
+        else:
+            prefer_provider = prev_provider or "gemini"
 
+        # Cache busting: zapisuj pod nowa nazwa (z timestampem)
+        ts = int(_time.time())
+        if current_path.parts:
+            base_name = current_path.stem.split("_t")[0]
+            new_filename = f"{base_name}_t{ts}{current_path.suffix}"
+            output_path = current_path.parent / new_filename
+        else:
+            output_path = (CAROUSELS_DIR / brand_id / carousel_id /
+                           f"{slide_index+1:02d}_regen_t{ts}.jpg")
+
+        img_meta = render_slide_image(
+            slide, style, output_path,
+            use_ai_images=True,
+            prefer_provider=prefer_provider,
+            image_quality="low",
+            text_mode="overlay",
+            slide_index=slide_index,
+            text_settings=effective_text_settings,
+            image_custom_instructions=image_instructions,
+        )
+        slide["image_path"] = img_meta["image_path"]
+        slide["image_provider"] = img_meta["image_provider"]
+        slide["image_model"] = img_meta["image_model"]
+
+    slides[slide_index] = slide
     update_carousel(carousel_id, slides=slides)
     return get_carousel(carousel_id)
 
@@ -426,8 +464,14 @@ def render_slide_image(
     img = Image.open(io.BytesIO(result["image_bytes"])).convert("RGB")
     img = img.resize((SLIDE_WIDTH, SLIDE_HEIGHT), Image.LANCZOS)
 
-    # Tekst nakladamy Pillowem TYLKO gdy nie wstrzyknelismy go do AI
+    ensure_dir(output_path.parent)
+
+    # Zapisz wersje BEZ tekstu (background-only) — potrzebna do regeneracji tekstu
+    # bez ponownego wolania AI image gen. Tylko gdy uzywamy Pillow overlay.
     if not inline_text_payload:
+        bg_path = output_path.parent / f"{output_path.stem}_bg{output_path.suffix}"
+        img.save(bg_path, "JPEG", quality=92)
+
         img = apply_text_to_image(
             img, headline, body,
             slide_index=slide_index,
@@ -435,7 +479,6 @@ def render_slide_image(
             image_focus_hint=image_focus,
         )
 
-    ensure_dir(output_path.parent)
     img.save(output_path, "JPEG", quality=92)
 
     return {

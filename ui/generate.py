@@ -832,23 +832,27 @@ def _get_regen_jobs() -> dict:
 
 def _start_slide_regen_job(carousel_id: str, slide_index: int,
                               image_instructions: str,
-                              new_headline: str, new_body: str) -> str:
+                              new_headline: str, new_body: str,
+                              regenerate_image: bool) -> str:
     jobs = _get_regen_jobs()
     job_id = uuid.uuid4().hex[:8]
+    mode_label = "Regeneruję obraz + tekst..." if regenerate_image else "Aktualizuję tekst (bez nowego obrazu)..."
     jobs[job_id] = {
         "id": job_id,
         "carousel_id": carousel_id,
         "slide_index": slide_index,
         "status": "running",
-        "stage": "Regeneracja slajdu...",
+        "stage": mode_label,
         "started_at": time.time(),
         "finished_at": None,
         "result": None,
         "error": None,
+        "regenerate_image": regenerate_image,
     }
     thread = threading.Thread(
         target=_run_slide_regen_job,
-        args=(jobs, job_id, carousel_id, slide_index, image_instructions, new_headline, new_body),
+        args=(jobs, job_id, carousel_id, slide_index, image_instructions,
+              new_headline, new_body, regenerate_image),
         daemon=True,
     )
     add_script_run_ctx(thread)
@@ -858,7 +862,8 @@ def _start_slide_regen_job(carousel_id: str, slide_index: int,
 
 def _run_slide_regen_job(jobs: dict, job_id: str, carousel_id: str,
                            slide_index: int, image_instructions: str,
-                           new_headline: str, new_body: str):
+                           new_headline: str, new_body: str,
+                           regenerate_image: bool):
     try:
         from core.carousel_generator import regenerate_single_slide
         new_h = new_headline if new_headline.strip() else None
@@ -869,6 +874,7 @@ def _run_slide_regen_job(jobs: dict, job_id: str, carousel_id: str,
             image_instructions=image_instructions,
             new_headline=new_h,
             new_body=new_b,
+            regenerate_image=regenerate_image,
         )
         jobs[job_id]["status"] = "done"
         jobs[job_id]["result"] = result
@@ -880,6 +886,7 @@ def _run_slide_regen_job(jobs: dict, job_id: str, carousel_id: str,
         jobs[job_id]["finished_at"] = time.time()
 
 
+@st.fragment(run_every=2)
 def _render_slide_regen_editor(carousel: dict, slide_index: int):
     """Inline editor pod kazdym slajdem: zmiana tekstu + regeneracja obrazu."""
     car_id = carousel["id"]
@@ -895,8 +902,23 @@ def _render_slide_regen_editor(carousel: dict, slide_index: int):
                        if j["status"] in ("done", "error")), None)
 
     if active:
-        st.info(f"🎨 Regeneruję slajd... ({int(time.time() - active['started_at'])}s)")
+        elapsed = int(time.time() - active["started_at"])
+        st.info(f"🎨 {active['stage']} ({elapsed}s)")
         return
+
+    # Po zakonczeniu joba: zaktualizuj wyswietlany slajd najnowszymi danymi z DB
+    if last_done and last_done["status"] == "done" and last_done.get("result"):
+        new_carousel = last_done["result"]
+        if new_carousel and new_carousel.get("slides"):
+            new_slide = new_carousel["slides"][slide_index]
+            # Pokaz odswiezony obraz + tekst
+            if new_slide.get("image_path"):
+                try:
+                    st.image(new_slide["image_path"], use_container_width=True,
+                              caption="✅ Po regeneracji")
+                except Exception:
+                    pass
+            slide = new_slide  # uzyj nowych wartosci ponizej w placeholderach
 
     with st.expander("✏️ Popraw ten slajd", expanded=False):
         new_h = st.text_input(
@@ -912,7 +934,7 @@ def _render_slide_regen_editor(carousel: dict, slide_index: int):
             placeholder=(slide.get("body", "") or "")[:80],
         )
         img_inst = st.text_area(
-            "🎨 Co zmienić w obrazie?",
+            "🎨 Co zmienić w obrazie? (puste = obraz zostaje, zmieni się tylko tekst)",
             value="",
             height=70,
             key=f"{kp}_img",
@@ -922,20 +944,39 @@ def _render_slide_regen_editor(carousel: dict, slide_index: int):
             ),
         )
 
-        if st.button("🔄 Regeneruj slajd", key=f"{kp}_btn", type="primary",
-                      use_container_width=True):
-            if not (img_inst.strip() or new_h.strip() or new_b.strip()):
-                st.warning("Podaj co najmniej jedną zmianę (tekst lub instrukcje dla obrazu).")
-            else:
-                _start_slide_regen_job(car_id, slide_index, img_inst, new_h, new_b)
-                st.success("Job ruszył w tle — odśwież za chwilę.")
-                st.rerun()
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            btn_text = st.button(
+                "📝 Tylko tekst",
+                key=f"{kp}_btn_text",
+                use_container_width=True,
+                disabled=not (new_h.strip() or new_b.strip()),
+                help="Zachowuje obecny obraz, zmienia tylko nagłówek/body. Szybkie, nie kosztuje AI."
+            )
+        with col_btn2:
+            btn_full = st.button(
+                "🎨 Tekst + nowy obraz",
+                key=f"{kp}_btn_full",
+                type="primary",
+                use_container_width=True,
+                disabled=not (img_inst.strip() or new_h.strip() or new_b.strip()),
+                help="Generuje nowe tło AI + nakłada nowy tekst. Wolniejsze, używa kwoty AI."
+            )
 
-        if last_done:
-            if last_done["status"] == "done":
-                st.success("✅ Slajd zregenerowany. Odśwież widok.")
-            elif last_done["status"] == "error":
-                st.error(f"❌ Błąd: {last_done['error']}")
+        if btn_text:
+            if not (new_h.strip() or new_b.strip()):
+                st.warning("Wpisz nowy headline lub body.")
+            else:
+                _start_slide_regen_job(car_id, slide_index, "", new_h, new_b,
+                                          regenerate_image=False)
+                st.rerun()
+        elif btn_full:
+            _start_slide_regen_job(car_id, slide_index, img_inst, new_h, new_b,
+                                      regenerate_image=True)
+            st.rerun()
+
+        if last_done and last_done["status"] == "error":
+            st.error(f"❌ Błąd: {last_done['error']}")
 
 
 def _show_carousel_preview(carousel: dict):

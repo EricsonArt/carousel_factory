@@ -1060,12 +1060,18 @@ def _render_replicated_slide(slide: dict, style: Optional[dict], output_path: Pa
 
     img = Image.open(io.BytesIO(result["image_bytes"])).convert("RGB")
     img = img.resize((SLIDE_WIDTH, SLIDE_HEIGHT), Image.LANCZOS)
+
+    ensure_dir(output_path.parent)
+
+    # Zapisz wersje bez tekstu — do regeneracji tekstu bez ponownego AI image gen
+    bg_path = output_path.parent / f"{output_path.stem}_bg{output_path.suffix}"
+    img.save(bg_path, "JPEG", quality=92)
+
     img = apply_text_to_image(img, headline, body,
                                 slide_index=slide_index,
                                 text_settings=text_settings,
                                 image_focus_hint=image_focus)
 
-    ensure_dir(output_path.parent)
     img.save(output_path, "JPEG", quality=92)
 
     return {
