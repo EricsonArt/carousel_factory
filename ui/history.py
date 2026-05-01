@@ -173,21 +173,35 @@ def _render_bulk_reschedule_section(brand_id: str, all_carousels: list):
             "ℹ️ Wprowadzony czas traktujemy jako **czas polski (CET/CEST)**. "
             "Konwertujemy na UTC przed wysylka do Publera."
         )
-        col_n1, col_n2 = st.columns(2)
-        tomorrow_8 = (datetime.now() + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
-        with col_n1:
-            new_date = st.date_input("Start od daty", value=tomorrow_8.date(), key=f"bulk_new_date_{brand_id}")
-            new_time = st.time_input("Start od godziny", value=tomorrow_8.time(), key=f"bulk_new_time_{brand_id}")
-        with col_n2:
-            gap_min = st.slider("Min odstep (minuty)", 30, 240, 60, step=15, key=f"bulk_gap_min_{brand_id}")
-            gap_max = st.slider("Max odstep (minuty)", 30, 360, 120, step=15, key=f"bulk_gap_max_{brand_id}")
-            jitter = st.slider("Jitter ± (minuty)", 0, 30, 10, step=5, key=f"bulk_jitter_{brand_id}",
-                                help="Losowe przesuniecie ±X min od bazowego odstepu, zeby godziny "
-                                     "nie byly idealnie rowne (algorytm uwielbia naturalne spready).")
 
-        if gap_min > gap_max:
-            st.error("Min odstep musi byc <= max odstep.")
-            return
+        # Preset: co godzinę
+        fixed_hourly = st.checkbox(
+            "⚡ Stały odstęp: 1 karuzelę co godzinę (dokładnie 60 min, bez jittera)",
+            value=True,
+            key=f"bulk_fixed_hourly_{brand_id}",
+        )
+
+        col_n1, col_n2 = st.columns(2)
+        # Domyślny start: najbliższa pełna godzina w przyszłości
+        _now = datetime.now()
+        _next_hour = _now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        with col_n1:
+            new_date = st.date_input("Start od daty", value=_next_hour.date(), key=f"bulk_new_date_{brand_id}")
+            new_time = st.time_input("Start od godziny", value=_next_hour.time(), key=f"bulk_new_time_{brand_id}")
+        with col_n2:
+            if fixed_hourly:
+                gap_min = 60
+                gap_max = 60
+                jitter = 0
+                st.info("Odstęp: **60 min**, jitter: **0 min**")
+            else:
+                gap_min = st.slider("Min odstep (minuty)", 30, 240, 60, step=15, key=f"bulk_gap_min_{brand_id}")
+                gap_max = st.slider("Max odstep (minuty)", 30, 360, 120, step=15, key=f"bulk_gap_max_{brand_id}")
+                jitter = st.slider("Jitter ± (minuty)", 0, 30, 10, step=5, key=f"bulk_jitter_{brand_id}",
+                                    help="Losowe przesuniecie ±X min od bazowego odstepu.")
+                if gap_min > gap_max:
+                    st.error("Min odstep musi byc <= max odstep.")
+                    return
 
         # Konwersja czas polski (CET/CEST) -> UTC.
         # Polska: zima = UTC+1 (CET), lato = UTC+2 (CEST). Uzywamy zoneinfo dla poprawnego DST.

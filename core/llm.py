@@ -19,6 +19,16 @@ from core.utils import extract_json_block, safe_json_loads
 from db import increment_usage
 
 
+def _raise_friendly(exc: Exception, model_id: str) -> None:
+    msg = str(exc)
+    if "credit balance is too low" in msg or "insufficient_balance" in msg:
+        raise RuntimeError(
+            "Brak kredytów na koncie Anthropic. "
+            "Doładuj konto na: https://console.anthropic.com/settings/billing"
+        )
+    raise RuntimeError(f"Błąd Claude API ({model_id}): {exc}")
+
+
 def _client():
     if not ANTHROPIC_API_KEY:
         raise RuntimeError(
@@ -57,7 +67,7 @@ def call_claude(
     try:
         resp = client.messages.create(**kwargs)
     except Exception as e:
-        raise RuntimeError(f"Blad Claude API ({model_id}): {e}")
+        _raise_friendly(e, model_id)
 
     # Track token usage
     try:
@@ -148,7 +158,7 @@ def call_claude_vision(
     try:
         resp = client.messages.create(**kwargs)
     except Exception as e:
-        raise RuntimeError(f"Blad Claude Vision ({model_id}): {e}")
+        _raise_friendly(e, model_id)
 
     try:
         usage = resp.usage
@@ -239,7 +249,7 @@ def call_claude_vision_with_tool(
     try:
         resp = client.messages.create(**kwargs)
     except Exception as e:
-        raise RuntimeError(f"Blad Claude Vision Tool Use ({model_id}): {e}")
+        _raise_friendly(e, model_id)
 
     try:
         usage = resp.usage
