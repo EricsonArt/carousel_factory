@@ -886,7 +886,6 @@ def _run_slide_regen_job(jobs: dict, job_id: str, carousel_id: str,
         jobs[job_id]["finished_at"] = time.time()
 
 
-@st.fragment(run_every=2)
 def _render_slide_regen_editor(carousel: dict, slide_index: int):
     """Inline editor pod kazdym slajdem: zmiana tekstu + regeneracja obrazu."""
     car_id = carousel["id"]
@@ -903,22 +902,22 @@ def _render_slide_regen_editor(carousel: dict, slide_index: int):
 
     if active:
         elapsed = int(time.time() - active["started_at"])
-        st.info(f"🎨 {active['stage']} ({elapsed}s)")
+        st.info(f"🎨 {active['stage']} ({elapsed}s) — odśwież stronę za chwilę")
         return
 
-    # Po zakonczeniu joba: zaktualizuj wyswietlany slajd najnowszymi danymi z DB
+    # Po zakonczeniu joba: pokaz odswiezony obraz nad editorem
     if last_done and last_done["status"] == "done" and last_done.get("result"):
         new_carousel = last_done["result"]
-        if new_carousel and new_carousel.get("slides"):
-            new_slide = new_carousel["slides"][slide_index]
-            # Pokaz odswiezony obraz + tekst
+        new_slides = new_carousel.get("slides", []) if new_carousel else []
+        if 0 <= slide_index < len(new_slides):
+            new_slide = new_slides[slide_index]
             if new_slide.get("image_path"):
                 try:
                     st.image(new_slide["image_path"], use_container_width=True,
-                              caption="✅ Po regeneracji")
+                              caption="✅ Po regeneracji (odśwież stronę gdy nie widać)")
                 except Exception:
                     pass
-            slide = new_slide  # uzyj nowych wartosci ponizej w placeholderach
+            slide = new_slide
 
     with st.expander("✏️ Popraw ten slajd", expanded=False):
         new_h = st.text_input(
