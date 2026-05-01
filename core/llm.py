@@ -193,6 +193,81 @@ def call_claude_vision_json(
     raise ValueError(f"Vision JSON parse failed. Raw: {raw[:500]}")
 
 
+def call_claude_vision_with_tool(
+    prompt: str,
+    images: list,
+    tool_name: str,
+    tool_description: str,
+    tool_input_schema: dict,
+    system: str = "",
+    max_tokens: int = 4096,
+    model: Optional[str] = None,
+    temperature: float = 0.3,
+) -> dict:
+    """
+    Vision + Tool Use — wymusza dokladny schemat outputu.
+    Claude MUSI wypelnic wszystkie pola required ze schemy, inaczej API odrzuci.
+    Zwraca {"input": <dict z tool input>, "raw_text": <ewentualny tekst odpowiedzi>}.
+    """
+    client = _client()
+    model_id = model or CLAUDE_VISION_MODEL
+
+    content_blocks = []
+    for img in images:
+        block = _image_to_block(img)
+        if block:
+            content_blocks.append(block)
+    content_blocks.append({"type": "text", "text": prompt})
+
+    tool_def = {
+        "name": tool_name,
+        "description": tool_description,
+        "input_schema": tool_input_schema,
+    }
+
+    kwargs = {
+        "model": model_id,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": content_blocks}],
+        "tools": [tool_def],
+        "tool_choice": {"type": "tool", "name": tool_name},
+        "temperature": temperature,
+    }
+    if system:
+        kwargs["system"] = system
+
+    try:
+        resp = client.messages.create(**kwargs)
+    except Exception as e:
+        raise RuntimeError(f"Blad Claude Vision Tool Use ({model_id}): {e}")
+
+    try:
+        usage = resp.usage
+        total_tokens = (usage.input_tokens or 0) + (usage.output_tokens or 0)
+        cost = (usage.input_tokens or 0) * 3.0 / 1_000_000 + \
+               (usage.output_tokens or 0) * 15.0 / 1_000_000
+        increment_usage("anthropic", model_id, tokens=total_tokens, cost=cost)
+    except Exception:
+        pass
+
+    tool_input: Optional[dict] = None
+    raw_text_parts: list = []
+    for block in resp.content:
+        btype = getattr(block, "type", None)
+        if btype == "tool_use":
+            tool_input = getattr(block, "input", None) or {}
+        elif btype == "text":
+            raw_text_parts.append(getattr(block, "text", ""))
+
+    if tool_input is None:
+        raise ValueError(
+            f"Claude nie wywolal narzedzia {tool_name}. "
+            f"Raw text: {' '.join(raw_text_parts)[:500]}"
+        )
+
+    return {"input": tool_input, "raw_text": " ".join(raw_text_parts)}
+
+
 def _image_to_block(img) -> Optional[dict]:
     """Konwertuj sciezke/url/bytes na content block dla Anthropic."""
     if isinstance(img, (str, Path)):

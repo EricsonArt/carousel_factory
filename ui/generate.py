@@ -822,6 +822,23 @@ def _show_carousel_preview(carousel: dict):
                         st.markdown(f"**Slajd {idx+1}** — ⚪ użyto stylu marki "
                                      f"(AI nie zwrócił viral_visual lub było niekompletne)")
 
+        # Surowa odpowiedz Claude — dla debugowania
+        try:
+            from pathlib import Path as _P
+            from config import CAROUSELS_DIR as _CD
+            raw_path = _P(_CD) / carousel.get("brand_id", "") / carousel["id"] / "claude_raw_response.json"
+            if raw_path.exists():
+                with st.expander("🐛 Debug: surowa odpowiedź Claude Vision (kliknij gdy coś nie działa)"):
+                    st.caption(f"Plik: `{raw_path}`")
+                    try:
+                        import json as _json
+                        raw_content = _json.loads(raw_path.read_text(encoding="utf-8"))
+                        st.json(raw_content)
+                    except Exception as _e:
+                        st.code(raw_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
     if slides:
         cols = st.columns(min(len(slides), 4))
         for i, slide in enumerate(slides):

@@ -21,7 +21,7 @@ from typing import Optional
 import requests
 
 from config import PROMPTS_DIR, CAROUSELS_DIR, SLIDE_WIDTH, SLIDE_HEIGHT
-from core.llm import call_claude_vision_json
+from core.llm import call_claude_vision_json, call_claude_vision_with_tool
 from core.image_router import generate_image, QuotaExhausted, ImageGenerationError
 from core.text_renderer import apply_text_to_image, merge_text_settings
 from core.carousel_generator import _normalize_copy_text  # post-processing dashes/PLN
@@ -412,11 +412,110 @@ def _viral_visual_to_text_settings(v: Optional[dict]) -> dict:
     return out
 
 
-def analyze_and_replicate(viral_data: dict, brief: dict, style: Optional[dict] = None,
-                            language: str = "pl", clone_visual: bool = False) -> dict:
+def _build_tool_schema(clone_visual: bool, expected_slide_count: int) -> dict:
     """
-    Wywoluje Claude Vision z slajdami viralu + briefem usera, dostaje JSON
-    z 'replicated_carousel' o tej samej strukturze co generate_copy.
+    Buduje JSON Schema dla tool use ktore WYMUSI w API obecnosc wszystkich pol.
+    Gdy clone_visual=True, viral_visual jest required na kazdym slajdzie.
+    """
+    viral_visual_schema = {
+        "type": "object",
+        "properties": {
+            "text_position": {"type": "string", "enum": ["top", "center", "bottom"],
+                              "description": "Gdzie tekst fizycznie sie znajduje na slajdzie"},
+            "text_color_hex": {"type": "string",
+                                "description": "Dokladny kolor tekstu w formacie #RRGGBB"},
+            "text_alignment": {"type": "string", "enum": ["left", "center", "right"]},
+            "weight": {"type": "string", "enum": ["black", "bold", "regular", "light"],
+                        "description": "Grubosc czcionki"},
+            "size_hint": {"type": "string", "enum": ["huge", "large", "medium", "small"],
+                            "description": "huge=>30% wysokosci slajdu, large=20-30%, medium=10-20%, small=<10%"},
+            "uppercase": {"type": "boolean"},
+            "has_stroke": {"type": "boolean", "description": "Czy tekst ma kontur/obrys"},
+            "stroke_color_hex": {"type": "string",
+                                  "description": "Kolor obrysu hex (lub '#000000' jesli has_stroke=false)"},
+            "background_aesthetic": {"type": "string",
+                                      "description": "Krotki ENG opis tla/mood do generatora obrazow"},
+        },
+        "required": ["text_position", "text_color_hex", "text_alignment", "weight",
+                      "size_hint", "uppercase", "has_stroke", "stroke_color_hex", "background_aesthetic"],
+    }
+
+    slide_props = {
+        "order": {"type": "integer"},
+        "type": {"type": "string", "enum": ["hook", "content", "cta"]},
+        "headline": {"type": "string",
+                      "description": "DOKLADNY tekst headline odczytany ze slajdu — kopiuj 1:1, nie przerabiaj"},
+        "body": {"type": "string",
+                  "description": "DOKLADNY tekst body odczytany ze slajdu — kopiuj 1:1 (lub '' jesli brak body)"},
+        "adaptation_note": {"type": "string",
+                              "description": "'copied 1:1' / 'translated from X' / 'adjusted for CTA: X→Y'"},
+        "image_prompt": {"type": "string", "description": "ENG opis tla do generatora AI"},
+        "image_focus": {"type": "string", "enum": ["top", "center", "bottom"]},
+    }
+    slide_required = ["order", "type", "headline", "body", "image_prompt", "image_focus"]
+
+    if clone_visual:
+        slide_props["viral_visual"] = viral_visual_schema
+        slide_required.append("viral_visual")
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "viral_analysis": {
+                "type": "object",
+                "properties": {
+                    "hook_text_original": {"type": "string"},
+                    "hook_pattern": {"type": "string"},
+                    "body_progression": {"type": "string"},
+                    "tone": {"type": "string"},
+                    "theme": {"type": "string"},
+                    "slide_count": {"type": "integer"},
+                },
+                "required": ["hook_text_original", "tone", "theme"],
+            },
+            "replicated_carousel": {
+                "type": "object",
+                "properties": {
+                    "meta": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {"type": "string"},
+                            "language": {"type": "string"},
+                            "slide_count": {"type": "integer"},
+                        },
+                        "required": ["topic", "language", "slide_count"],
+                    },
+                    "slides": {
+                        "type": "array",
+                        "minItems": expected_slide_count,
+                        "items": {
+                            "type": "object",
+                            "properties": slide_props,
+                            "required": slide_required,
+                        },
+                    },
+                    "caption": {"type": "string"},
+                    "hashtags": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["meta", "slides", "caption", "hashtags"],
+            },
+        },
+        "required": ["viral_analysis", "replicated_carousel"],
+    }
+    return schema
+
+
+def analyze_and_replicate(viral_data: dict, brief: dict, style: Optional[dict] = None,
+                            language: str = "pl", clone_visual: bool = False,
+                            debug_dump_path: Optional[Path] = None) -> dict:
+    """
+    Wywoluje Claude Vision z slajdami viralu + briefem usera.
+    Uzywa Tool Use ktore WYMUSI po stronie API obecnosc wszystkich pol schematu.
+
+    Gdy clone_visual=True, kazdy slajd MA viral_visual ze wszystkimi 9 polami,
+    bo schemat tego wymaga — Claude nie moze tego pominac.
+
+    debug_dump_path: jesli podane, zapisuje raw response Claude do tego pliku JSON.
     """
     system_prompt = _load_replicator_prompt()
 
@@ -512,6 +611,13 @@ def analyze_and_replicate(viral_data: dict, brief: dict, style: Optional[dict] =
 
     user_prompt = f"""Otrzymujesz {images_count} {'slajdów karuzeli' if is_carousel else 'kadr (cover frame wideo)'} wiralu z {platform.upper()}.
 
+⚠️ NAJWAŻNIEJSZA ZASADA — przeczytaj 3 razy:
+   POLE `headline` I `body` MUSZĄ ZAWIERAĆ DOKŁADNIE TEN SAM TEKST KTÓRY WIDZISZ NA SLAJDZIE.
+   NIE PARAFRAZUJ. NIE ULEPSZAJ. NIE REBRANDUJ. NIE TWÓRZ NOWYCH SLOGANÓW.
+   Jeśli na slajdzie jest "VINTED IS DEAD." → wpisz "VINTED IS DEAD." (nie "Vinted już nie działa").
+   Jeśli na slajdzie jest "5 mistakes that kill your sales" → wpisz to słowo w słowo.
+   Jedyny wyjątek: tłumaczenie gdy target_language ≠ jezyk wiralu.
+
 ═══════════════════════════════════════════════════════════════
 {visual_block}
 ═══════════════════════════════════════════════════════════════
@@ -558,12 +664,53 @@ Zwróć JSON według schematu z system promptu. TYLKO JSON.
     # Vision call — wysylamy wszystkie slajdy (potrzebne do dokladnego odczytu tekstu)
     images_payload = viral_data["images_bytes"][:10]
 
-    result = call_claude_vision_json(
-        prompt=user_prompt,
-        images=images_payload,
-        system=system_prompt,
-        max_tokens=10000,
+    # Expected slide count: ile oryginalnych + 1 CTA
+    expected_count = (images_count if is_carousel else 8) + 1
+    tool_schema = _build_tool_schema(clone_visual, expected_count)
+
+    tool_description = (
+        "Submit the viral carousel replication. "
+        "Copy text from each viral slide AS-IS (do NOT rewrite, do NOT rebrand) into headline/body. "
+        + ("Each slide MUST include viral_visual analyzing the original visual style. " if clone_visual else "")
+        + "Add ONE additional CTA slide at the end."
     )
+
+    try:
+        tool_result = call_claude_vision_with_tool(
+            prompt=user_prompt,
+            images=images_payload,
+            tool_name="submit_viral_replication",
+            tool_description=tool_description,
+            tool_input_schema=tool_schema,
+            system=system_prompt,
+            max_tokens=10000,
+            temperature=0.2,  # niska temp dla wiernego kopiowania tekstu
+        )
+        result = tool_result["input"]
+        raw_for_debug = tool_result
+    except Exception as e:
+        # Fallback do starszej metody na wypadek gdyby tool use nie dzialal
+        print(f"[viral_replicator] Tool use padl ({e}), fallback do JSON mode")
+        result = call_claude_vision_json(
+            prompt=user_prompt,
+            images=images_payload,
+            system=system_prompt,
+            max_tokens=10000,
+        )
+        raw_for_debug = {"input": result, "raw_text": "(tool use failed, used JSON fallback)"}
+
+    if debug_dump_path:
+        try:
+            debug_dump_path.write_text(
+                json.dumps({
+                    "clone_visual": clone_visual,
+                    "claude_response": raw_for_debug,
+                    "tool_schema_used": tool_schema,
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
     return _normalize_copy_text(result, language=language)
 
@@ -603,7 +750,19 @@ def replicate_viral_carousel(
     if progress_callback:
         stage = "Claude Vision: analiza tekstu + stylu wizualnego..." if clone_visual else "Claude Vision analizuje strukture viralu..."
         progress_callback(stage, 0.20)
-    replicated = analyze_and_replicate(viral_data, brief, style, language=language, clone_visual=clone_visual)
+
+    # Debug dump — zapisz raw response Claude do pliku zeby user mogl zobaczyc co AI zwrocilo
+    carousel_id = generate_id("car")
+    carousel_dir = CAROUSELS_DIR / brand_id / carousel_id
+    ensure_dir(carousel_dir)
+    debug_dump_path = carousel_dir / "claude_raw_response.json"
+
+    replicated = analyze_and_replicate(
+        viral_data, brief, style,
+        language=language,
+        clone_visual=clone_visual,
+        debug_dump_path=debug_dump_path,
+    )
 
     # JSON mapping: replicated_carousel jest zagniezdzony, splaszczamy
     carousel_payload = replicated.get("replicated_carousel") or replicated
@@ -616,11 +775,7 @@ def replicate_viral_carousel(
     if not slides_data:
         raise ViralFetchError("Vision nie zwrocil slajdow do zreplikowania.")
 
-    # 3) Image generation per slide + Pillow overlay
-    carousel_id = generate_id("car")
-    carousel_dir = CAROUSELS_DIR / brand_id / carousel_id
-    ensure_dir(carousel_dir)
-
+    # 3) Image generation per slide + Pillow overlay (carousel_id juz utworzony wyzej do debug dumpa)
     slides_with_images = []
     n = len(slides_data)
 
