@@ -353,8 +353,67 @@ def _load_replicator_prompt() -> str:
     return (PROMPTS_DIR / "viral_replicator.md").read_text(encoding="utf-8")
 
 
+def _viral_visual_to_text_settings(v: Optional[dict]) -> dict:
+    """
+    Mapuje analize wizualna z viralu (Vision output) na nasz schemat text_settings.
+    Tylko klucze ktore sa pewne — reszta bierze wartosci marki (merge w renderze).
+    """
+    if not isinstance(v, dict) or not v:
+        return {}
+    out: dict = {}
+
+    pos = (v.get("text_position") or "").strip().lower()
+    if pos in ("top", "center", "bottom"):
+        out["position"] = pos
+
+    color = (v.get("text_color_hex") or "").strip()
+    if color.startswith("#") and len(color) in (4, 7):
+        out["text_color"] = color
+
+    weight = (v.get("weight") or "").strip().lower()
+    if weight in ("black", "extra_bold", "extrabold", "heavy"):
+        out["font_key"] = "montserrat_black"
+    elif weight == "bold":
+        out["font_key"] = "montserrat_bold"
+    elif weight in ("regular", "medium", "light", "thin"):
+        out["font_key"] = "inter"
+
+    size = (v.get("size_hint") or "").strip().lower()
+    if size == "huge":
+        out["headline_size_hero"] = 140
+        out["headline_size_rest"] = 110
+        out["body_size"] = 48
+    elif size == "large":
+        out["headline_size_hero"] = 110
+        out["headline_size_rest"] = 88
+        out["body_size"] = 42
+    elif size == "medium":
+        out["headline_size_hero"] = 88
+        out["headline_size_rest"] = 68
+        out["body_size"] = 36
+    elif size == "small":
+        out["headline_size_hero"] = 64
+        out["headline_size_rest"] = 50
+        out["body_size"] = 30
+
+    if isinstance(v.get("uppercase"), bool):
+        out["uppercase"] = v["uppercase"]
+
+    has_stroke = v.get("has_stroke")
+    if has_stroke is False:
+        out["stroke_width"] = 0
+    elif has_stroke is True:
+        out["stroke_width"] = 6
+
+    sc = (v.get("stroke_color_hex") or "").strip()
+    if sc.startswith("#") and len(sc) in (4, 7):
+        out["stroke_color"] = sc
+
+    return out
+
+
 def analyze_and_replicate(viral_data: dict, brief: dict, style: Optional[dict] = None,
-                            language: str = "pl") -> dict:
+                            language: str = "pl", clone_visual: bool = False) -> dict:
     """
     Wywoluje Claude Vision z slajdami viralu + briefem usera, dostaje JSON
     z 'replicated_carousel' o tej samej strukturze co generate_copy.
@@ -402,6 +461,27 @@ def analyze_and_replicate(viral_data: dict, brief: dict, style: Optional[dict] =
     brief_name = (brief.get("brand_name") or brief.get("name") or "").strip()
     brief_product = (brief.get("product") or "").strip()[:200]
 
+    if clone_visual:
+        visual_block = (
+            "clone_visual_style: TRUE\n"
+            "→ KAŻDY slajd MUSI zawierać pole `viral_visual` z analizą wyglądu tekstu:\n"
+            "  - text_position: gdzie tekst jest umieszczony (top/center/bottom)\n"
+            "  - text_color_hex: dokładny kolor tekstu (#RRGGBB)\n"
+            "  - text_alignment: left/center/right\n"
+            "  - weight: black/bold/regular/light (grubość czcionki)\n"
+            "  - size_hint: huge/large/medium/small (jak duży tekst względem slajdu)\n"
+            "  - uppercase: czy tekst jest CAPS\n"
+            "  - has_stroke: czy tekst ma czarny obrys/cień\n"
+            "  - stroke_color_hex: kolor obrysu (jeśli has_stroke)\n"
+            "  - background_aesthetic: krótki ENG opis tła do generatora AI\n"
+            "Slajd CTA też dostaje viral_visual — wartości spójne z resztą slajdów."
+        )
+    else:
+        visual_block = (
+            "clone_visual_style: FALSE\n"
+            "→ NIE dodawaj pola viral_visual. Tekst dostanie styl marki."
+        )
+
     user_prompt = f"""Otrzymujesz {images_count} {'slajdów karuzeli' if is_carousel else 'kadr (cover frame wideo)'} wiralu z {platform.upper()}.
 
 ORIGINAL CAPTION:
@@ -430,6 +510,9 @@ ZADANIE:
    - CTA musi naturalnie wynikać z tematyki poprzednich slajdów
 
 5. Liczba slajdów = {images_count if is_carousel else 'dobierz 7-9 (wideo → zaprojektuj strukturę)'} oryginalnych + 1 CTA.
+
+TRYB WIZUALNY:
+{visual_block}
 
 WYMAGANIA TECHNICZNE:
 {lang_block}
@@ -469,6 +552,7 @@ def replicate_viral_carousel(
     language: str = "pl",
     text_settings: Optional[dict] = None,
     progress_callback=None,
+    clone_visual: bool = False,
 ) -> dict:
     """
     Pelny pipeline replikacji viralu.
@@ -486,8 +570,9 @@ def replicate_viral_carousel(
 
     # 2) Vision analysis + replication
     if progress_callback:
-        progress_callback("Claude Vision analizuje strukture viralu...", 0.20)
-    replicated = analyze_and_replicate(viral_data, brief, style, language=language)
+        stage = "Claude Vision: analiza tekstu + stylu wizualnego..." if clone_visual else "Claude Vision analizuje strukture viralu..."
+        progress_callback(stage, 0.20)
+    replicated = analyze_and_replicate(viral_data, brief, style, language=language, clone_visual=clone_visual)
 
     # JSON mapping: replicated_carousel jest zagniezdzony, splaszczamy
     carousel_payload = replicated.get("replicated_carousel") or replicated
@@ -515,6 +600,13 @@ def replicate_viral_carousel(
         slide_filename = f"{i+1:02d}_{sanitize_filename(slide.get('headline', 'slide'))}.jpg"
         slide_path = carousel_dir / slide_filename
 
+        # Per-slajd override stylu tekstu — tylko gdy clone_visual i AI zwrocilo viral_visual
+        if clone_visual:
+            visual_override = _viral_visual_to_text_settings(slide.get("viral_visual"))
+            slide_text_settings = {**effective_text_settings, **visual_override}
+        else:
+            slide_text_settings = effective_text_settings
+
         try:
             img_meta = _render_replicated_slide(
                 slide, style, slide_path, i,
@@ -522,7 +614,7 @@ def replicate_viral_carousel(
                 prefer_provider=prefer_provider,
                 image_quality=image_quality,
                 model_override=model_override,
-                text_settings=effective_text_settings,
+                text_settings=slide_text_settings,
             )
         except Exception as e:
             img_meta = {

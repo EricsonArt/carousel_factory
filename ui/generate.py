@@ -142,6 +142,7 @@ def _run_viral_job(jobs: dict, job_id: str, brand_id: str, params: dict):
             language=params.get("language", "pl"),
             text_settings=params.get("text_settings"),
             progress_callback=cb,
+            clone_visual=params.get("clone_visual", False),
         )
         jobs[job_id]["carousel"] = carousel
         jobs[job_id]["status"] = "done"
@@ -1203,6 +1204,18 @@ def _render_viral_replicator_section(brand_id: str, brief: dict, styles: list):
             v_prefer = None
             v_model = None
 
+        # Tryb wizualny: kopiuj styl tekstu z viralu zamiast uzywac stylu marki
+        v_clone_visual = st.checkbox(
+            "🎨 Skopiuj też styl wizualny tekstu z viralu (czcionka, pozycja, grubość, kolor — 1:1)",
+            value=False,
+            key="viral_clone_visual",
+            help=(
+                "WYŁĄCZONE = tekst jest renderowany w stylu Twojej marki (font, kolory, pozycja z brand settings).\n"
+                "WŁĄCZONE = AI analizuje każdy slajd viralu i odtwarza wygląd tekstu 1:1: "
+                "tę samą pozycję, kolor, grubość czcionki, CAPS, obrys. Tła nadal generowane AI."
+            ),
+        )
+
         v_submitted = st.form_submit_button("🎬 Replikuj viralu", type="primary", use_container_width=True)
 
     if v_submitted:
@@ -1223,6 +1236,7 @@ def _render_viral_replicator_section(brand_id: str, brief: dict, styles: list):
             "model_override": v_model,
             "language": v_language,
             "text_settings": st.session_state.get("generate_text_settings"),
+            "clone_visual": v_clone_visual,
         })
         st.success(
             f"✅ Replikacja ruszyła w tle (job `{job_id}`). yt-dlp pobiera viralu, "

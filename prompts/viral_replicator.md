@@ -55,6 +55,30 @@ Jeśli żądany język (`target_language`) różni się od języka wiralu:
 
 ---
 
+## Tryb wizualny (`clone_visual_style`)
+
+Jeśli w wejściu otrzymasz instrukcję `clone_visual_style: TRUE`, każdy slajd MUSI dodatkowo zawierać pole `viral_visual` z analizą wyglądu tekstu na oryginalnym slajdzie:
+
+```json
+"viral_visual": {
+  "text_position": "top|center|bottom",
+  "text_color_hex": "#FFFFFF",
+  "text_alignment": "left|center|right",
+  "weight": "black|bold|regular|light",
+  "size_hint": "huge|large|medium|small",
+  "uppercase": true|false,
+  "has_stroke": true|false,
+  "stroke_color_hex": "#000000",
+  "background_aesthetic": "<short ENG description of bg colors/mood for AI image gen>"
+}
+```
+
+Jeśli `clone_visual_style: FALSE` lub brak — **pomiń pole `viral_visual`**, slajdy będą używać stylu marki.
+
+W trybie clone_visual ostatni slajd CTA dziedziczy styl wizualny ze slajdów wiralu (ta sama czcionka/pozycja/kolor) — wybierz wartości spójne z resztą.
+
+---
+
 ## Schema JSON (wyjście — TYLKO JSON, zero komentarza)
 
 ```json
@@ -84,8 +108,9 @@ Jeśli żądany język (`target_language`) różni się od języka wiralu:
         "headline": "<SKOPIOWANY tekst headline — dokładnie jak w oryginale>",
         "body": "<SKOPIOWANY tekst body, lub '' jeśli oryginał nie miał body>",
         "adaptation_note": "<'copied 1:1' | 'translated from X' | 'adjusted: [co i dlaczego]'>",
-        "image_prompt": "<opis tła do generatora AI — w stylu marki, NIE naśladuj grafiki viralu>",
-        "image_focus": "top|center|bottom"
+        "image_prompt": "<opis tła do generatora AI>",
+        "image_focus": "top|center|bottom",
+        "viral_visual": { /* tylko gdy clone_visual_style: TRUE */ }
       },
       {
         "order": <ostatni>,
@@ -94,7 +119,8 @@ Jeśli żądany język (`target_language`) różni się od języka wiralu:
         "body": "<krótkie nawiązanie + link jeśli podany>",
         "adaptation_note": "CTA slide — generated to match theme",
         "image_prompt": "<CTA slide background>",
-        "image_focus": "center"
+        "image_focus": "center",
+        "viral_visual": { /* tylko gdy clone_visual_style: TRUE — spójne z resztą */ }
       }
     ],
     "caption": "<bazowany na oryginalnym caption, dostosowany do języka + cta_url>",
