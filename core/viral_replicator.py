@@ -31,6 +31,87 @@ from db import create_carousel, update_carousel, get_brief, get_style
 
 SUPPORTED_DOMAINS = ("tiktok.com", "instagram.com")
 
+# Model Vision dla viral replicatora — Opus jest znacznie lepszy w OCR (czytanie tekstu z obrazow)
+# niz Sonnet, co rozwiazuje problem 'czasami tekst sie nie pojawia / jest zepsuty'.
+VIRAL_VISION_MODEL = "claude-opus-4-7"
+
+
+# ─────────────────────────────────────────────────────────────
+# EMOJI STRIPPING — Pillow + Montserrat nie ma glyphow emoji
+# (renderuja sie jako prostokaty/tofu). Usuwamy je z headline/body
+# przed nakladaniem na obraz. W caption (IG/TT) emotki zostaja.
+# ─────────────────────────────────────────────────────────────
+
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"   # emoticons
+    "\U0001F300-\U0001F5FF"   # symbols & pictographs
+    "\U0001F680-\U0001F6FF"   # transport & map symbols
+    "\U0001F1E0-\U0001F1FF"   # flags
+    "\U0001F900-\U0001F9FF"   # supplemental symbols and pictographs
+    "\U0001FA00-\U0001FAFF"   # symbols and pictographs extended-A
+    "\U00002600-\U000026FF"   # misc symbols
+    "\U00002700-\U000027BF"   # dingbats
+    "\U00002300-\U000023FF"   # misc technical
+    "\U00002B00-\U00002BFF"   # arrows etc
+    "\U0001F000-\U0001F02F"   # mahjong/dominoes/playing cards
+    "\U0001F0A0-\U0001F0FF"
+    "‍"                    # zero-width joiner (laczy emoji)
+    "️"                    # variation selector
+    "⃣"                    # combining enclosing keycap
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _strip_emojis(text: str) -> str:
+    """Usuwa emoji + warianty stylowe (FE0F, ZWJ). Zachowuje normalne polskie znaki."""
+    if not text:
+        return text or ""
+    cleaned = _EMOJI_RE.sub("", text)
+    # Usuwamy podwojne spacje powstale po stripowaniu i trim
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    return cleaned
+
+
+# ─────────────────────────────────────────────────────────────
+# DOMINANT VISUAL STYLE — wybiera 1 spojny styl dla calej karuzeli
+# zamiast pozwalac AI dac inny font/kolor/obrys per slajd
+# (viral karuzele uzywaja jednego fontu throughout!)
+# ─────────────────────────────────────────────────────────────
+
+def _compute_dominant_visual_style(slides_data: list) -> dict:
+    """
+    Z viral_visual wszystkich slajdow liczy najczestsza wartosc per pole
+    i zwraca text_settings override dla CALEJ karuzeli (font, kolor, obrys).
+    Per-slajd zostaja tylko: position, size_hint (tu wariacje sa naturalne).
+    """
+    from collections import Counter
+
+    visuals = [s.get("viral_visual") for s in slides_data
+               if isinstance(s.get("viral_visual"), dict)]
+    if not visuals:
+        return {}
+
+    def _mode(values):
+        clean = [v for v in values if v not in (None, "")]
+        if not clean:
+            return None
+        return Counter(clean).most_common(1)[0][0]
+
+    # Buduj jeden 'wirtualny viral_visual' z dominujacych wartosci
+    dominant: dict = {
+        "weight":           _mode([v.get("weight") for v in visuals]),
+        "text_color_hex":   _mode([v.get("text_color_hex") for v in visuals]),
+        "text_alignment":   _mode([v.get("text_alignment") for v in visuals]),
+        "uppercase":        _mode([v.get("uppercase") for v in visuals]),
+        "has_stroke":       _mode([v.get("has_stroke") for v in visuals]),
+        "stroke_color_hex": _mode([v.get("stroke_color_hex") for v in visuals]),
+    }
+
+    # Konwertuj na nasz schemat text_settings (font_key, text_color, etc.)
+    return _viral_visual_to_text_settings(dominant)
+
 
 class ViralFetchError(Exception):
     """Nie udalo sie pobrac danych viralu (bad URL, prywatny, geo-blocked, rate limit)."""
@@ -685,6 +766,7 @@ Zwróć JSON według schematu z system promptu. TYLKO JSON.
             system=system_prompt,
             max_tokens=10000,
             temperature=0.2,  # niska temp dla wiernego kopiowania tekstu
+            model=VIRAL_VISION_MODEL,  # Opus 4.7 — lepszy OCR niz Sonnet
         )
         result = tool_result["input"]
         raw_for_debug = tool_result
@@ -776,6 +858,19 @@ def replicate_viral_carousel(
         raise ViralFetchError("Vision nie zwrocil slajdow do zreplikowania.")
 
     # 3) Image generation per slide + Pillow overlay (carousel_id juz utworzony wyzej do debug dumpa)
+    # Spojny styl wizualny dla CALEJ karuzeli — viral karuzele uzywaja jednego fontu/koloru
+    # wiec wyciagamy najczestsze wartosci ze slajdow i aplikujemy raz na bazowe ustawienia.
+    if clone_visual:
+        dominant_overrides = _compute_dominant_visual_style(slides_data)
+        carousel_base_settings = {**effective_text_settings, **dominant_overrides}
+        if dominant_overrides:
+            print(f"[viral_replicator] dominant visual style: {dominant_overrides}")
+        else:
+            print("[viral_replicator] clone_visual=True ale AI nie zwrocil zadnego viral_visual")
+    else:
+        dominant_overrides = {}
+        carousel_base_settings = effective_text_settings
+
     slides_with_images = []
     n = len(slides_data)
 
@@ -783,28 +878,42 @@ def replicate_viral_carousel(
         if progress_callback:
             progress_callback(f"Generuje slajd {i+1}/{n}...", 0.30 + 0.6 * (i / max(n, 1)))
 
-        slide_filename = f"{i+1:02d}_{sanitize_filename(slide.get('headline', 'slide'))}.jpg"
+        # Strip emojis przed renderowaniem (Pillow + Montserrat = brak glyphow emoji => prostokaty)
+        clean_headline = _strip_emojis(slide.get("headline", ""))
+        clean_body = _strip_emojis(slide.get("body", ""))
+
+        # Walidacja: jak po stripowaniu nic nie zostalo, ostrzezenie do logow
+        if clone_visual and not clean_headline and not clean_body:
+            print(f"[viral_replicator] slide {i+1}: tekst pusty po strippingu (oryg headline='{slide.get('headline','')[:50]}', body='{slide.get('body','')[:50]}')")
+
+        # Update slide dict zeby renderer dostal czysty tekst
+        slide_for_render = {**slide, "headline": clean_headline, "body": clean_body}
+
+        slide_filename = f"{i+1:02d}_{sanitize_filename(clean_headline or 'slide')}.jpg"
         slide_path = carousel_dir / slide_filename
 
-        # Per-slajd override stylu tekstu — tylko gdy clone_visual i AI zwrocilo viral_visual
+        # Per-slajd override stylu — TYLKO position i size moga sie roznic per slajd.
+        # Font, kolor, obrys, uppercase = wartosci dominujace dla calej karuzeli (spojnosc!).
         visual_applied = False
-        visual_override: dict = {}
+        per_slide_override: dict = {}
         if clone_visual:
-            raw_vv = slide.get("viral_visual")
-            visual_override = _viral_visual_to_text_settings(raw_vv)
-            if visual_override:
-                slide_text_settings = {**effective_text_settings, **visual_override}
+            raw_vv = slide.get("viral_visual") or {}
+            per_slide_dict = {
+                "text_position": raw_vv.get("text_position"),
+                "size_hint": raw_vv.get("size_hint"),
+            }
+            per_slide_override = _viral_visual_to_text_settings(per_slide_dict)
+            if per_slide_override or dominant_overrides:
+                slide_text_settings = {**carousel_base_settings, **per_slide_override}
                 visual_applied = True
-                print(f"[viral_replicator] slide {i+1}: viral_visual applied → {visual_override}")
             else:
-                slide_text_settings = effective_text_settings
-                print(f"[viral_replicator] slide {i+1}: clone_visual=True ale AI nie zwrocil viral_visual (raw={raw_vv})")
+                slide_text_settings = carousel_base_settings
         else:
-            slide_text_settings = effective_text_settings
+            slide_text_settings = carousel_base_settings
 
         try:
             img_meta = _render_replicated_slide(
-                slide, style, slide_path, i,
+                slide_for_render, style, slide_path, i,
                 use_ai_images=use_ai_images,
                 prefer_provider=prefer_provider,
                 image_quality=image_quality,
@@ -819,12 +928,12 @@ def replicate_viral_carousel(
             }
 
         slides_with_images.append({
-            **slide,
+            **slide_for_render,  # uzywamy oczyszczonego tekstu (bez emoji)
             "image_path": img_meta["image_path"],
             "image_provider": img_meta["image_provider"],
             "image_model": img_meta["image_model"],
             "_visual_applied": visual_applied,
-            "_visual_override": visual_override,
+            "_visual_override": {**dominant_overrides, **per_slide_override} if clone_visual else {},
         })
 
     # 4) Save caption + hashtags
