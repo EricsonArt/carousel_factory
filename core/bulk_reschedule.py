@@ -16,6 +16,86 @@ from core.publisher_publer import PublerClient, PublerError
 from db import get_carousel, update_carousel
 
 
+def cancel_all_scheduled(
+    brand_id: str,
+    publer_api_key: str,
+    publer_workspace_id: str = "",
+    progress_callback=None,
+) -> dict:
+    """
+    Anuluje WSZYSTKIE zaplanowane (status='scheduled') karuzele dla marki:
+    kasuje posty w Publerze + ustawia karuzelom status='draft', publer_post_id=''.
+    NIE rusza karuzel ze statusem 'posted', 'failed' albo 'draft' bez publer_post_id.
+
+    Zwraca: {'cancelled': int, 'failed': int, 'skipped': int, 'details': [...]}
+    """
+    from db import list_carousels
+
+    carousels = list_carousels(brand_id, limit=500)
+    scheduled = [
+        c for c in carousels
+        if (c.get("status") or "").lower() == "scheduled"
+        and (c.get("publer_post_id") or "").strip()
+    ]
+
+    if not scheduled:
+        return {"cancelled": 0, "failed": 0, "skipped": 0, "details": [],
+                "message": "Brak zaplanowanych postów do anulowania."}
+
+    client = None
+    if publer_api_key:
+        client = PublerClient(publer_api_key, publer_workspace_id)
+        if not publer_workspace_id:
+            try:
+                ws = client.get_workspaces()
+                if ws:
+                    client.set_workspace(str(ws[0].get("id", "")))
+            except PublerError:
+                pass
+
+    cancelled = 0
+    failed = 0
+    details: list[str] = []
+    n = len(scheduled)
+
+    for i, c in enumerate(scheduled):
+        cid = c["id"]
+        post_id = c.get("publer_post_id", "")
+        if progress_callback:
+            progress_callback(f"Anuluję {i+1}/{n}: {cid[:8]}...", (i / n))
+
+        deleted_in_publer = False
+        if client:
+            try:
+                client.delete_post(post_id)
+                deleted_in_publer = True
+            except PublerError as e:
+                # Tolerujemy 404 i podobne — post mogl juz nie istniec w Publerze
+                msg = str(e).lower()
+                if "404" in msg or "not found" in msg:
+                    deleted_in_publer = True
+                else:
+                    failed += 1
+                    details.append(f"❌ {cid}: {e}")
+                    continue
+
+        # Reset DB tak czy siak — nawet jak Publer odpowiedzial 404
+        update_carousel(cid, publer_post_id="", status="draft", scheduled_at="")
+        cancelled += 1
+        details.append(f"✅ {cid[:8]} — {'usunieto z Publera + reset DB' if deleted_in_publer else 'reset DB'}")
+
+    if progress_callback:
+        progress_callback("Gotowe", 1.0)
+
+    return {
+        "cancelled": cancelled,
+        "failed": failed,
+        "skipped": 0,
+        "details": details,
+        "total_scheduled_before": n,
+    }
+
+
 def bulk_reschedule(
     carousel_ids: list[str],
     start_dt_utc: datetime,

@@ -470,6 +470,72 @@ def render_automation(brand_id: str):
                 current_job["finished_at"] = time.time()
                 st.rerun()
 
+    # ── Anuluj wszystkie zaplanowane posty ──────────────────────────────
+    # Stop powyzej zatrzymuje TYLKO biezacy run generacji. Posty ktore juz
+    # zostaly wrzucone do Publera dalej beda publikowane wedlug harmonogramu.
+    # Ten guzik kasuje je z Publera.
+    st.markdown('<div style="margin-top:1.5rem;"></div>', unsafe_allow_html=True)
+    section_title("🚫 Zatrzymaj zaplanowane publikacje", icon="")
+
+    from db import list_carousels
+    all_carousels = list_carousels(brand_id, limit=500)
+    scheduled_count = sum(
+        1 for c in all_carousels
+        if (c.get("status") or "").lower() == "scheduled"
+        and (c.get("publer_post_id") or "").strip()
+    )
+
+    st.caption(
+        f"Aktualnie **{scheduled_count}** zaplanowanych postów w Publerze dla tej marki. "
+        f"Przycisk poniżej skasuje je wszystkie — żeby się nie opublikowały."
+    )
+
+    cancel_armed_key = f"auto_cancel_armed_{brand_id}"
+    if not st.session_state.get(cancel_armed_key, False):
+        if st.button(
+            f"🚫 Anuluj wszystkie zaplanowane posty ({scheduled_count})",
+            use_container_width=True,
+            disabled=(scheduled_count == 0 or is_running),
+            key=f"auto_cancel_arm_{brand_id}",
+        ):
+            st.session_state[cancel_armed_key] = True
+            st.rerun()
+    else:
+        st.warning(f"⚠️ Na pewno anulować WSZYSTKIE {scheduled_count} zaplanowanych postów? "
+                    "Posty zostaną skasowane z Publera, karuzele wrócą do statusu 'draft'. "
+                    "Tej akcji nie można cofnąć.")
+        col_y, col_n = st.columns(2)
+        with col_y:
+            if st.button("✓ Tak, anuluj wszystkie",
+                          key=f"auto_cancel_yes_{brand_id}",
+                          type="primary", use_container_width=True):
+                try:
+                    from core.bulk_reschedule import cancel_all_scheduled
+                    with st.spinner(f"Kasuję {scheduled_count} postów z Publera..."):
+                        result = cancel_all_scheduled(
+                            brand_id=brand_id,
+                            publer_api_key=PUBLER_API_KEY,
+                            publer_workspace_id=PUBLER_WORKSPACE_ID,
+                        )
+                    st.session_state[cancel_armed_key] = False
+                    st.success(
+                        f"✅ Anulowano: **{result['cancelled']}**  ·  "
+                        f"Błędów: **{result['failed']}**"
+                    )
+                    if result.get("details"):
+                        with st.expander("Szczegóły"):
+                            for d in result["details"][:50]:
+                                st.text(d)
+                except Exception as e:
+                    st.session_state[cancel_armed_key] = False
+                    st.error(f"❌ {e}")
+        with col_n:
+            if st.button("✗ Anuluj akcję",
+                          key=f"auto_cancel_no_{brand_id}",
+                          use_container_width=True):
+                st.session_state[cancel_armed_key] = False
+                st.rerun()
+
     # Instrukcja
     if not is_running and not current_job.get("status"):
         st.markdown(
