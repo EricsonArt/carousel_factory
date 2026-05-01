@@ -399,7 +399,10 @@ def analyze_and_replicate(viral_data: dict, brief: dict, style: Optional[dict] =
         else:
             cta_text_instruction = "- cta_text: brak w briefie — uzyj generycznego po polsku, np. 'Klik link w bio'"
 
-    user_prompt = f"""Otrzymujesz {images_count} {'slajdow karuzeli' if is_carousel else 'kadr (cover frame wideo)'} viralu z {platform.upper()}.
+    brief_name = (brief.get("brand_name") or brief.get("name") or "").strip()
+    brief_product = (brief.get("product") or "").strip()[:200]
+
+    user_prompt = f"""Otrzymujesz {images_count} {'slajdów karuzeli' if is_carousel else 'kadr (cover frame wideo)'} wiralu z {platform.upper()}.
 
 ORIGINAL CAPTION:
 {caption or '(brak)'}
@@ -407,48 +410,45 @@ ORIGINAL CAPTION:
 ORIGINAL HASHTAGS:
 {hashtags_str or '(brak)'}
 
+TARGET LANGUAGE: {language.upper()}
+
+---
+
 ZADANIE:
-1. Zanalizuj viralu strukture (hook, body progression, CTA, viral_drivers, tone)
+1. Odczytaj DOKŁADNY tekst z każdego slajdu (headline + body).
+   Zapisz w `text_density_per_slide` liczbę słów per slajd.
 
-2. **POLICZ DOKLADNIE SLOWA NA KAZDYM SLAJDZIE** (KRYTYCZNE dla zachowania stylu viralu):
-   - Dla kazdego slajdu zapisz w `text_density_per_slide`: liczbe slow w headline + body
-   - Niektore slajdy moga miec TYLKO obraz bez tekstu (zapisz 0)
-   - Niektore moga miec krotki hook (1-3 slowa)
-   - Inne moga miec dluzszy akapit (10-20 slow)
+2. Skopiuj tekst 1:1 do nowych slajdów — NIE przerabiaj, NIE rebranduj, NIE ulepszaj.
+   Jeśli target_language różni się od języka wiralu → przetłumacz zachowując rytm/CAPS/interpunkcję.
 
-3. Zreplikuj WZORZEC dla marki usera (uzywajac jego briefa) — zachowuj DNA, nie kopiuj slow
+3. Sprawdź czy skopiowany tekst jest spójny z CTA które dodasz na końcu.
+   Jeśli nie — zmień MINIMALNIE (max 1-2 słowa na slajd, tylko absolutnie konieczne).
 
-4. **DOPASUJ DLUGOSC TEKSTU 1:1**:
-   - Dla kazdego slajdu repliki, ustaw `headline_word_target` i `body_word_target` IDENTYCZNE
-     jak na oryginalnym slajdzie (±1 slowo)
-   - Jesli oryginalny slajd 1 ma 3 slowa headline → replika ma 2-4 slowa
-   - Jesli oryginalny slajd 5 mial sam obraz bez tekstu → replika tez ma minimum tekstu (1-3 slowa hint)
-   - Jesli viral ma minimalistyczny styl (kazdy slajd <8 slow) → REPLIKA TEZ minimalistyczna,
-     NIE rozwleklaj tylko bo brand brief ma duzo USPs
-
-5. CTA na ostatnim slajdzie MUSI uzyc:
+4. Dodaj JEDEN DODATKOWY slajd CTA na końcu (poza liczbą oryginalnych slajdów):
    {cta_text_instruction}
-   - cta_url (link, zostaje 1:1 niezaleznie od jezyka): "{cta_url or '(brak — uzyj generycznego CTA bez linku)'}"
+   - cta_url (link, 1:1 bez zmian): "{cta_url or '(brak)'}"
+   - CTA musi naturalnie wynikać z tematyki poprzednich slajdów
 
-6. Zaadaptuj liczbe slajdow do {images_count if is_carousel else '7-9 (poniewaz oryginal byl wideo, sam zaprojektuj)'}.
+5. Liczba slajdów = {images_count if is_carousel else 'dobierz 7-9 (wideo → zaprojektuj strukturę)'} oryginalnych + 1 CTA.
 
 WYMAGANIA TECHNICZNE:
 {lang_block}
 
-BRIEF MARKI USERA (uzyj wylacznie z tego, nie wymyslaj):
-{json.dumps(brief, ensure_ascii=False, indent=2)}
+KONTEKST MARKI (TYLKO dla slajdu CTA — nie przerabiaj reszty pod tę markę):
+- Nazwa marki: {brief_name or '(brak)'}
+- Produkt/usługa: {brief_product or '(brak)'}
 
-Zwroc JSON wedlug schematu z system promptu. TYLKO JSON.
+Zwróć JSON według schematu z system promptu. TYLKO JSON.
 """
 
-    # Vision call — przekazujemy obrazy viralu jako bytes
-    images_payload = viral_data["images_bytes"][:6]  # max 6 obrazow zeby nie wybuchnac na tokenach
+    # Vision call — wysylamy wszystkie slajdy (potrzebne do dokladnego odczytu tekstu)
+    images_payload = viral_data["images_bytes"][:10]
 
     result = call_claude_vision_json(
         prompt=user_prompt,
         images=images_payload,
         system=system_prompt,
-        max_tokens=8000,
+        max_tokens=10000,
     )
 
     return _normalize_copy_text(result, language=language)
