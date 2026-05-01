@@ -886,11 +886,16 @@ def _run_slide_regen_job(jobs: dict, job_id: str, carousel_id: str,
         jobs[job_id]["finished_at"] = time.time()
 
 
-def _render_slide_regen_editor(carousel: dict, slide_index: int):
-    """Inline editor pod kazdym slajdem: zmiana tekstu + regeneracja obrazu."""
+def _render_slide_regen_editor(carousel: dict, slide_index: int, scope: str = ""):
+    """Inline editor pod kazdym slajdem: zmiana tekstu + regeneracja obrazu.
+
+    scope: opcjonalny prefix gwarantujacy unikalnosc kluczy widgetow gdy ten sam
+           slajd renderuje sie w wielu miejscach (Generator vs Historia).
+    """
     car_id = carousel["id"]
     slide = carousel["slides"][slide_index]
-    kp = f"regen_{car_id}_{slide_index}"
+    scope_part = f"{scope}_" if scope else ""
+    kp = f"regen_{scope_part}{car_id}_{slide_index}"
 
     # Sprawdz czy juz jakis regen-job lecial dla tego slajdu
     regen_jobs = _get_regen_jobs()

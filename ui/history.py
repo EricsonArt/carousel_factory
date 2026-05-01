@@ -440,7 +440,7 @@ def render_history(brand_id: str):
 
     section_title("Lista karuzel", icon="🗂️")
 
-    for c in carousels:
+    for outer_idx, c in enumerate(carousels):
         status = c.get("status", "draft")
         bg, fg = _STATUS_COLORS.get(status, ("#F1F5F9", "#64748B"))
         slides = c.get("slides") or []
@@ -482,7 +482,8 @@ def render_history(brand_id: str):
                                         unsafe_allow_html=True)
 
                         # Editor: zmiana tekstu / regeneracja obrazu pojedynczego slajdu
-                        _render_slide_regen_editor(c, i)
+                        # scope wymusza unikalnosc kluczy widgetow w razie duplikatow id
+                        _render_slide_regen_editor(c, i, scope=f"hist{outer_idx}")
 
             st.markdown('<div style="margin-top:0.75rem;"></div>', unsafe_allow_html=True)
 
