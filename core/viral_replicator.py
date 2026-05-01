@@ -463,18 +463,46 @@ def analyze_and_replicate(viral_data: dict, brief: dict, style: Optional[dict] =
 
     if clone_visual:
         visual_block = (
-            "clone_visual_style: TRUE\n"
-            "→ KAŻDY slajd MUSI zawierać pole `viral_visual` z analizą wyglądu tekstu:\n"
-            "  - text_position: gdzie tekst jest umieszczony (top/center/bottom)\n"
-            "  - text_color_hex: dokładny kolor tekstu (#RRGGBB)\n"
-            "  - text_alignment: left/center/right\n"
-            "  - weight: black/bold/regular/light (grubość czcionki)\n"
-            "  - size_hint: huge/large/medium/small (jak duży tekst względem slajdu)\n"
-            "  - uppercase: czy tekst jest CAPS\n"
-            "  - has_stroke: czy tekst ma czarny obrys/cień\n"
-            "  - stroke_color_hex: kolor obrysu (jeśli has_stroke)\n"
-            "  - background_aesthetic: krótki ENG opis tła do generatora AI\n"
-            "Slajd CTA też dostaje viral_visual — wartości spójne z resztą slajdów."
+            "🔴 clone_visual_style: TRUE — TRYB KLONOWANIA WIZUALNEGO AKTYWNY 🔴\n\n"
+            "TO JEST NAJWAŻNIEJSZE ZADANIE TEJ ANALIZY. Bez `viral_visual` na każdym slajdzie\n"
+            "wynik jest BEZUŻYTECZNY — dlatego ABSOLUTNIE WYMAGANE jest wypełnienie tego pola.\n\n"
+            "DLA KAŻDEGO SLAJDU (włącznie z CTA) MUSISZ dodać pole `viral_visual` o strukturze:\n\n"
+            "```json\n"
+            "\"viral_visual\": {\n"
+            "  \"text_position\": \"top\" | \"center\" | \"bottom\",\n"
+            "  \"text_color_hex\": \"#FFFFFF\",\n"
+            "  \"text_alignment\": \"left\" | \"center\" | \"right\",\n"
+            "  \"weight\": \"black\" | \"bold\" | \"regular\" | \"light\",\n"
+            "  \"size_hint\": \"huge\" | \"large\" | \"medium\" | \"small\",\n"
+            "  \"uppercase\": true | false,\n"
+            "  \"has_stroke\": true | false,\n"
+            "  \"stroke_color_hex\": \"#000000\",\n"
+            "  \"background_aesthetic\": \"short ENG description of bg colors/mood for AI image gen\"\n"
+            "}\n"
+            "```\n\n"
+            "PRZYKŁAD wypełnionego viral_visual ze slajdu z wielkim białym tekstem CAPS na środku\n"
+            "z czarnym obrysem na czarnym gradient tle:\n"
+            "```json\n"
+            "\"viral_visual\": {\n"
+            "  \"text_position\": \"center\",\n"
+            "  \"text_color_hex\": \"#FFFFFF\",\n"
+            "  \"text_alignment\": \"center\",\n"
+            "  \"weight\": \"black\",\n"
+            "  \"size_hint\": \"huge\",\n"
+            "  \"uppercase\": true,\n"
+            "  \"has_stroke\": true,\n"
+            "  \"stroke_color_hex\": \"#000000\",\n"
+            "  \"background_aesthetic\": \"dark moody gradient, deep navy to black\"\n"
+            "}\n"
+            "```\n\n"
+            "PATRZ DOKŁADNIE NA KAŻDY SLAJD i analizuj:\n"
+            "- Gdzie fizycznie znajduje się tekst (góra/środek/dół)?\n"
+            "- Jaki dokładnie ma kolor (oszacuj hex jak najbliżej)?\n"
+            "- Czy jest gruby (black), pogrubiony (bold), zwykły (regular), cienki (light)?\n"
+            "- Jak duży względem slajdu (huge=ponad 30% wysokości, large=20-30%, medium=10-20%, small=poniżej 10%)?\n"
+            "- Czy jest CAPS LOCK?\n"
+            "- Czy ma czarny/biały obrys (kontur litery)?\n\n"
+            "Slajd CTA dziedziczy ten sam viral_visual styl co reszta slajdów — żeby wyglądało spójnie."
         )
     else:
         visual_block = (
@@ -483,6 +511,10 @@ def analyze_and_replicate(viral_data: dict, brief: dict, style: Optional[dict] =
         )
 
     user_prompt = f"""Otrzymujesz {images_count} {'slajdów karuzeli' if is_carousel else 'kadr (cover frame wideo)'} wiralu z {platform.upper()}.
+
+═══════════════════════════════════════════════════════════════
+{visual_block}
+═══════════════════════════════════════════════════════════════
 
 ORIGINAL CAPTION:
 {caption or '(brak)'}
@@ -511,8 +543,7 @@ ZADANIE:
 
 5. Liczba slajdów = {images_count if is_carousel else 'dobierz 7-9 (wideo → zaprojektuj strukturę)'} oryginalnych + 1 CTA.
 
-TRYB WIZUALNY:
-{visual_block}
+{("6. ⚠️ PRZYPOMNIENIE: clone_visual_style jest WŁĄCZONE — KAŻDY slajd musi mieć pole viral_visual ze WSZYSTKIMI 9 polami wypełnionymi (patrz instrukcja na górze)." if clone_visual else "")}
 
 WYMAGANIA TECHNICZNE:
 {lang_block}
@@ -601,9 +632,18 @@ def replicate_viral_carousel(
         slide_path = carousel_dir / slide_filename
 
         # Per-slajd override stylu tekstu — tylko gdy clone_visual i AI zwrocilo viral_visual
+        visual_applied = False
+        visual_override: dict = {}
         if clone_visual:
-            visual_override = _viral_visual_to_text_settings(slide.get("viral_visual"))
-            slide_text_settings = {**effective_text_settings, **visual_override}
+            raw_vv = slide.get("viral_visual")
+            visual_override = _viral_visual_to_text_settings(raw_vv)
+            if visual_override:
+                slide_text_settings = {**effective_text_settings, **visual_override}
+                visual_applied = True
+                print(f"[viral_replicator] slide {i+1}: viral_visual applied → {visual_override}")
+            else:
+                slide_text_settings = effective_text_settings
+                print(f"[viral_replicator] slide {i+1}: clone_visual=True ale AI nie zwrocil viral_visual (raw={raw_vv})")
         else:
             slide_text_settings = effective_text_settings
 
@@ -628,11 +668,28 @@ def replicate_viral_carousel(
             "image_path": img_meta["image_path"],
             "image_provider": img_meta["image_provider"],
             "image_model": img_meta["image_model"],
+            "_visual_applied": visual_applied,
+            "_visual_override": visual_override,
         })
 
     # 4) Save caption + hashtags
     caption_path = carousel_dir / "caption.txt"
     caption_path.write_text(caption + "\n\n" + " ".join(hashtags), encoding="utf-8")
+
+    # Statystyki clone_visual — ile slajdów dostało faktyczny override z AI
+    visual_stats = {
+        "clone_visual_requested": clone_visual,
+        "slides_with_visual_applied": sum(1 for s in slides_with_images if s.get("_visual_applied")),
+        "slides_total": len(slides_with_images),
+        "per_slide_overrides": [
+            {"slide": idx+1, "applied": s.get("_visual_applied"), "override": s.get("_visual_override", {})}
+            for idx, s in enumerate(slides_with_images)
+        ],
+    }
+
+    if clone_visual and visual_stats["slides_with_visual_applied"] == 0:
+        print("[viral_replicator] OSTRZEZENIE: clone_visual=True ale AI nie zwrocil viral_visual ANI razu. "
+              "Slajdy uzyja stylu marki (tak jak by clone_visual=False).")
 
     # Append viral analysis as separate file (do debugu / nauki)
     analysis_path = carousel_dir / "viral_analysis.json"
@@ -643,6 +700,7 @@ def replicate_viral_carousel(
             "original_url": url,
             "platform": viral_data["platform"],
             "viral_meta": viral_data.get("raw_meta", {}),
+            "clone_visual_stats": visual_stats,
         }, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

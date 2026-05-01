@@ -793,6 +793,35 @@ def _show_carousel_preview(carousel: dict):
     section_title("Podgląd slajdów", icon="🖼️")
 
     slides = carousel.get("slides", [])
+
+    # Diagnostyka clone_visual (tylko gdy karuzela byla zrobiona viral replicatorem)
+    if carousel.get("source") == "viral_replicator":
+        applied = sum(1 for s in slides if s.get("_visual_applied"))
+        n = len(slides)
+        any_visual_attempt = any("_visual_applied" in s for s in slides)
+        if any_visual_attempt:
+            if applied == 0:
+                st.warning(
+                    f"⚠️ Tryb 'Skopiuj styl wizualny viralu' był włączony, ale AI nie zwrócił "
+                    f"`viral_visual` na żadnym slajdzie ({applied}/{n}). Slajdy dostały styl marki. "
+                    f"Spróbuj jeszcze raz lub wklej inny viral z czytelnym tekstem."
+                )
+            elif applied < n:
+                st.info(
+                    f"ℹ️ Styl viralu zaaplikowany na {applied}/{n} slajdach. "
+                    f"Pozostałe użyły stylu marki (AI nie zwrócił dla nich `viral_visual`)."
+                )
+            else:
+                st.success(f"✅ Styl wizualny viralu zaaplikowany na wszystkich {n}/{n} slajdach.")
+            with st.expander("🔍 Debug: per-slajd override stylu z viralu"):
+                for idx, s in enumerate(slides):
+                    if s.get("_visual_applied"):
+                        st.markdown(f"**Slajd {idx+1}** — ✅ override zastosowany:")
+                        st.json(s.get("_visual_override", {}))
+                    else:
+                        st.markdown(f"**Slajd {idx+1}** — ⚪ użyto stylu marki "
+                                     f"(AI nie zwrócił viral_visual lub było niekompletne)")
+
     if slides:
         cols = st.columns(min(len(slides), 4))
         for i, slide in enumerate(slides):
