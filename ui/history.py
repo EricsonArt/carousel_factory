@@ -438,6 +438,9 @@ def _start_repair_job(carousel_id: str) -> str:
     return job_id
 
 
+PAGE_SIZE = 10  # ile karuzel per strona — ogranicza DOM nodes
+
+
 def render_history(brand_id: str):
     page_header(
         "Historia karuzel",
@@ -445,7 +448,7 @@ def render_history(brand_id: str):
         icon="📜",
     )
 
-    carousels = list_carousels(brand_id, limit=50)
+    carousels = list_carousels(brand_id, limit=200)
 
     if not carousels:
         empty_state(
@@ -485,18 +488,73 @@ def render_history(brand_id: str):
 
     section_title("Lista karuzel", icon="🗂️")
 
-    for outer_idx, c in enumerate(carousels):
+    # ── Paginacja ──────────────────────────────────────────────
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page_key = f"hist_page_{brand_id}"
+    current_page = st.session_state.get(page_key, 0)
+    if current_page >= total_pages:
+        current_page = 0
+        st.session_state[page_key] = 0
+
+    if total_pages > 1:
+        nav_prev, nav_info, nav_next = st.columns([1, 3, 1])
+        with nav_prev:
+            if st.button("◀ Wstecz", key=f"prev_{brand_id}", disabled=current_page == 0,
+                          use_container_width=True):
+                st.session_state[page_key] = max(0, current_page - 1)
+                st.rerun()
+        with nav_info:
+            start = current_page * PAGE_SIZE + 1
+            end = min((current_page + 1) * PAGE_SIZE, total)
+            st.markdown(
+                f'<div style="text-align:center;padding:0.4rem;color:#64748B;font-size:0.85rem;">'
+                f'Strona <b>{current_page + 1}</b>/{total_pages} '
+                f'<span style="color:#94A3B8;">· karuzele {start}–{end} z {total}</span></div>',
+                unsafe_allow_html=True,
+            )
+        with nav_next:
+            if st.button("Dalej ▶", key=f"next_{brand_id}",
+                          disabled=current_page >= total_pages - 1,
+                          use_container_width=True):
+                st.session_state[page_key] = min(total_pages - 1, current_page + 1)
+                st.rerun()
+
+    page_carousels = carousels[current_page * PAGE_SIZE:(current_page + 1) * PAGE_SIZE]
+
+    for outer_idx, c in enumerate(page_carousels):
         status = c.get("status", "draft")
         bg, fg = _STATUS_COLORS.get(status, ("#F1F5F9", "#64748B"))
         slides = c.get("slides") or []
         created = (c.get("created_at") or "")[:16].replace("T", " ")
 
-        label = (
-            f"{created}  ·  {len(slides)} slajdów  ·  "
-            f"{'–' if not c.get('caption') else c['caption'][:40] + '...'}"
-        )
+        # ── Lazy expand: button-toggle zamiast st.expander ────────
+        # st.expander zawsze trzyma content w DOM (mimo collapsed) — używamy
+        # session_state + warunkowy render, więc tylko aktywna karuzela ma DOM.
+        expand_key = f"hist_expanded_{c['id']}"
+        is_expanded = st.session_state.get(expand_key, False)
 
-        with st.expander(label, expanded=False):
+        caption_short = "–" if not c.get("caption") else c["caption"][:50] + "..."
+        chevron = "▼" if is_expanded else "▶"
+
+        # Header: klik rozwija/zwija
+        header_label = (
+            f"{chevron}  {created}  ·  "
+            f"{status.upper()}  ·  "
+            f"{len(slides)} slajdów  ·  {caption_short}"
+        )
+        if st.button(
+            header_label,
+            key=f"toggle_{c['id']}_{outer_idx}",
+            use_container_width=True,
+        ):
+            st.session_state[expand_key] = not is_expanded
+            st.rerun()
+
+        if not is_expanded:
+            continue
+
+        # Pełna zawartość — renderowana TYLKO gdy karuzela rozwinięta
+        with st.container(border=True):
             # Status badge + meta
             st.markdown(f"""
             <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
@@ -587,6 +645,7 @@ def render_history(brand_id: str):
                                 publer_workspace_id=PUBLER_WORKSPACE_ID or "",
                             )
                         st.session_state.pop(_confirm_key, None)
+                        st.session_state.pop(f"hist_expanded_{c['id']}", None)
                         if del_result.get("ok"):
                             publer_info = " + usunięto z Publer" if del_result.get("publer_deleted") else ""
                             st.success(f"✅ Usunięto{publer_info}.")
