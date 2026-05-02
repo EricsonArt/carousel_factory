@@ -110,6 +110,10 @@ CLAUDE_TEXT_MODEL = "claude-sonnet-4-6"          # copywriting, brief wizard
 CLAUDE_VISION_MODEL = "claude-sonnet-4-6"        # vision: style extraction, viral replicator
 CLAUDE_FAST_MODEL = "claude-haiku-4-5-20251001"  # walidacja, krotkie taski
 
+# LLM router: 'auto' (Gemini gdy są klucze, fallback Claude), 'gemini', 'claude'
+# Gemini 2.5 Flash jest ~10× tańszy od Claude Sonnet, więc default = auto.
+LLM_PROVIDER = _get_secret("LLM_PROVIDER", "auto").lower()
+
 
 # ─────────────────────────────────────────────────────────────
 # IMAGE GENERATION CASCADE

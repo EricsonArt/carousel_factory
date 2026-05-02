@@ -1,11 +1,19 @@
 """
-Warstwa LLM: Claude (text + vision), Anthropic SDK.
+Warstwa LLM: router Gemini-first (taniej) z fallbackiem na Claude.
 
-Eksportowane:
-  - call_claude(prompt, system, max_tokens) -> str           # text-only
-  - call_claude_vision(prompt, images, system) -> str        # vision (URLs lub bytes)
-  - call_claude_json(prompt, system, schema_hint) -> dict    # forsuje JSON output, repair loop
-  - validate_against_brief(slides, brief) -> dict            # moderation/anti-hallucination
+Eksportowane (sygnatury 1:1 — żaden caller nie musi nic zmieniać):
+  - call_claude(prompt, system, max_tokens) -> str
+  - call_claude_vision(prompt, images, system) -> str
+  - call_claude_json(prompt, system) -> dict
+  - call_claude_vision_json(prompt, images, system) -> dict
+  - call_claude_vision_with_tool(...) -> dict
+  - validate_against_brief(slides, brief) -> dict
+
+Routing:
+  config.LLM_PROVIDER:
+    'auto'   (default) → Gemini jeśli są GEMINI_API_KEYS, fallback Claude
+    'gemini' → tylko Gemini
+    'claude' → tylko Claude
 """
 import base64
 import json
@@ -14,9 +22,31 @@ from typing import Optional
 
 from config import (
     ANTHROPIC_API_KEY, CLAUDE_TEXT_MODEL, CLAUDE_VISION_MODEL, CLAUDE_FAST_MODEL,
+    GEMINI_API_KEYS, LLM_PROVIDER,
 )
 from core.utils import extract_json_block, safe_json_loads
 from db import increment_usage
+
+
+def _use_gemini_first() -> bool:
+    """Czy próbować Gemini przed Claude?"""
+    if LLM_PROVIDER == "claude":
+        return False
+    if LLM_PROVIDER == "gemini":
+        return True
+    # auto: Gemini gdy są klucze
+    return bool(GEMINI_API_KEYS)
+
+
+def _gemini_unavailable_for_fallback(exc: Exception) -> bool:
+    """Czy ten błąd Gemini znaczy że trzeba spróbować Claude?"""
+    try:
+        from core.llm_gemini import GeminiQuotaError, GeminiError
+        if isinstance(exc, (GeminiQuotaError, GeminiError)):
+            return True
+    except ImportError:
+        return True
+    return False
 
 
 def _raise_friendly(exc: Exception, model_id: str) -> None:
@@ -24,7 +54,8 @@ def _raise_friendly(exc: Exception, model_id: str) -> None:
     if "credit balance is too low" in msg or "insufficient_balance" in msg:
         raise RuntimeError(
             "Brak kredytów na koncie Anthropic. "
-            "Doładuj konto na: https://console.anthropic.com/settings/billing"
+            "Doładuj konto na: https://console.anthropic.com/settings/billing — "
+            "lub ustaw LLM_PROVIDER=gemini w .env / Streamlit Secrets."
         )
     raise RuntimeError(f"Błąd Claude API ({model_id}): {exc}")
 
@@ -48,10 +79,19 @@ def call_claude(
     model: Optional[str] = None,
     temperature: float = 0.7,
 ) -> str:
-    """
-    Wolanie Claude Sonnet 4.6 (lub innego modelu).
-    Zwraca surowy tekst odpowiedzi.
-    """
+    """Router: Gemini-first → fallback Claude. Zachowuje stare API."""
+    if _use_gemini_first():
+        try:
+            from core.llm_gemini import gemini_text
+            return gemini_text(prompt, system=system, max_tokens=max_tokens,
+                                 temperature=temperature)
+        except Exception as e:
+            if LLM_PROVIDER == "gemini" or not ANTHROPIC_API_KEY:
+                raise RuntimeError(f"Gemini error: {e}")
+            if not _gemini_unavailable_for_fallback(e):
+                raise RuntimeError(f"Gemini error: {e}")
+            # else: fallthrough do Claude
+
     client = _client()
     model_id = model or CLAUDE_TEXT_MODEL
 
@@ -127,15 +167,19 @@ def call_claude_vision(
     model: Optional[str] = None,
     temperature: float = 0.5,
 ) -> str:
-    """
-    Vision call. `images` to lista:
-      - sciezek do plikow lokalnych (Path/str)
-      - URLi (http/https)
-      - bytes (raw image bytes)
+    """Router: Gemini Vision-first → fallback Claude Vision."""
+    if _use_gemini_first():
+        try:
+            from core.llm_gemini import gemini_vision
+            return gemini_vision(prompt, images=images, system=system,
+                                   max_tokens=max_tokens, temperature=temperature)
+        except Exception as e:
+            if LLM_PROVIDER == "gemini" or not ANTHROPIC_API_KEY:
+                raise RuntimeError(f"Gemini Vision error: {e}")
+            if not _gemini_unavailable_for_fallback(e):
+                raise RuntimeError(f"Gemini Vision error: {e}")
+            # fallthrough do Claude
 
-    Klucz: kazdy obraz konwertujemy na format Anthropic content block
-    (image/jpeg lub image/png base64, lub URL).
-    """
     client = _client()
     model_id = model or CLAUDE_VISION_MODEL
 
@@ -219,6 +263,22 @@ def call_claude_vision_with_tool(
     Claude MUSI wypelnic wszystkie pola required ze schemy, inaczej API odrzuci.
     Zwraca {"input": <dict z tool input>, "raw_text": <ewentualny tekst odpowiedzi>}.
     """
+    if _use_gemini_first():
+        try:
+            from core.llm_gemini import gemini_vision_with_tool
+            return gemini_vision_with_tool(
+                prompt, images=images,
+                tool_name=tool_name, tool_description=tool_description,
+                tool_input_schema=tool_input_schema,
+                system=system, max_tokens=max_tokens, temperature=temperature,
+            )
+        except Exception as e:
+            if LLM_PROVIDER == "gemini" or not ANTHROPIC_API_KEY:
+                raise RuntimeError(f"Gemini tool-use error: {e}")
+            if not _gemini_unavailable_for_fallback(e):
+                raise RuntimeError(f"Gemini tool-use error: {e}")
+            # fallthrough do Claude
+
     client = _client()
     model_id = model or CLAUDE_VISION_MODEL
 
