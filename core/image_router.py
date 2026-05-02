@@ -210,10 +210,22 @@ def _call_provider(cfg: dict, prompt: str, refs: Optional[list], size: tuple,
     raise ImageGenerationError(f"Nieznany provider: {cfg['provider']}")
 
 
+# quality → sufiks promptu (gpt-image-2 NIE OBSŁUGUJE param quality w API!)
+# Reuse z gpt_image_studio/modules/image_generator.py — przetestowane, działa
+_GPT_IMAGE_2_QUALITY_SUFFIX = {
+    "low":    "",
+    "medium": "high quality",
+    "high":   "ultra high quality, intricate details, 8k, masterpiece",
+}
+
+
 def _call_openai(model_id: str, prompt: str, refs: Optional[list], size: tuple, quality: str = "low") -> bytes:
     """
     OpenAI Images API.
-    quality: 'low' (~$0.011/img), 'medium' (~$0.042/img), 'high' (~$0.167/img)
+
+    UWAGA: gpt-image-2 NIE OBSŁUGUJE param `quality` w API. Studio gpt_image_studio
+    używa quality jako sufiksu promptu zamiast param API. Wcześniej karuzele wysyłały
+    `quality=` do gpt-image-2 co powodowało albo silent ignore albo błędy → kiepskie obrazy.
     """
     try:
         from openai import OpenAI
@@ -221,35 +233,50 @@ def _call_openai(model_id: str, prompt: str, refs: Optional[list], size: tuple, 
         raise ImageGenerationError("Brak pakietu openai. pip install openai")
 
     client = OpenAI(api_key=OPENAI_API_KEY)
+    is_gpt_image_2 = model_id == "gpt-image-2"
+
     # Karuzele 4:5 — portrait dla high quality / gpt-image-2; square dla low (oszczędność)
-    openai_size = "1024x1536" if (quality == "high" or model_id == "gpt-image-2") else "1024x1024"
+    openai_size = "1024x1536" if (quality == "high" or is_gpt_image_2) else "1024x1024"
+
+    # Przygotuj prompt — dla gpt-image-2 doklej sufiks quality, NIE używaj param quality
+    final_prompt = prompt
+    if is_gpt_image_2:
+        suffix = _GPT_IMAGE_2_QUALITY_SUFFIX.get(quality, "")
+        if suffix:
+            final_prompt = f"{prompt}, {suffix}"
+
+    # Buduj kwargs — quality TYLKO dla starszych modeli (gpt-image-1)
+    base_kwargs = {
+        "model": model_id,
+        "prompt": final_prompt,
+        "size": openai_size,
+        "n": 1,
+    }
+    if not is_gpt_image_2:
+        base_kwargs["quality"] = quality
 
     try:
         if refs:
             ref_files = [_to_file_object(r) for r in refs[:4]]
             resp = client.images.edit(
-                model=model_id,
                 image=ref_files if len(ref_files) > 1 else ref_files[0],
-                prompt=prompt,
-                size=openai_size,
-                quality=quality,
-                n=1,
+                **base_kwargs,
             )
         else:
-            resp = client.images.generate(
-                model=model_id,
-                prompt=prompt,
-                size=openai_size,
-                quality=quality,
-                n=1,
-            )
+            resp = client.images.generate(**base_kwargs)
     except Exception as e:
         msg = str(e).lower()
+        if "must be verified" in msg or ("403" in msg and "verif" in msg):
+            raise ImageGenerationError(
+                "OpenAI: organizacja niezweryfikowana. gpt-image-2 wymaga weryfikacji "
+                "tożsamości. Wejdź na platform.openai.com/settings/organization/general "
+                "i kliknij Start przy 'Individual'. Po ~15 min spróbuj ponownie."
+            )
         if "rate" in msg or "quota" in msg or "billing" in msg or "insufficient" in msg:
             raise QuotaExhausted(f"OpenAI quota: {e}")
         raise
 
-    # OpenAI zwraca b64_json (gpt-image-1) lub url (dall-e-3)
+    # OpenAI zwraca b64_json (gpt-image-1, gpt-image-2) lub url (dall-e-3)
     data = resp.data[0]
     if hasattr(data, "b64_json") and data.b64_json:
         return base64.b64decode(data.b64_json)
