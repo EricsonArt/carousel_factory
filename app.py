@@ -11,10 +11,26 @@ from pathlib import Path
 
 import streamlit as st
 
+import streamlit as st
 from db import init_db, list_brands, create_brand, get_brand, get_brief, list_styles, get_today_total_cost
 from core.utils import generate_id
 from ui.auth import require_password
 from ui.theme import inject_css, page_header, badge
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def _cached_brands():
+    return list_brands()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_today_cost():
+    return get_today_total_cost()
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def _cached_brand(brand_id: str):
+    return get_brand(brand_id)
 from ui.onboarding import render_onboarding
 from ui.style_library import render_style_library
 
@@ -62,7 +78,7 @@ _components.html("""
 
 def _init_session():
     if "active_brand_id" not in st.session_state:
-        brands = list_brands()
+        brands = _cached_brands()
         st.session_state.active_brand_id = brands[0]["id"] if brands else None
 
 
@@ -96,7 +112,7 @@ with st.sidebar:
 
     st.markdown('<hr style="border-top:1px solid #EAE8F2;margin:0 0 1.1rem;">', unsafe_allow_html=True)
 
-    brands = list_brands()
+    brands = _cached_brands()
 
     if brands:
         st.markdown('<div style="font-size:0.62rem;color:#9CA3AF;text-transform:uppercase;'
@@ -113,7 +129,7 @@ with st.sidebar:
         )
         st.session_state.active_brand_id = selected
 
-        active = get_brand(selected)
+        active = _cached_brand(selected)
         niche = active.get("niche", "")
         completion = active.get("brief_completion", 0.0)
         pct = int(completion * 100)
@@ -199,6 +215,7 @@ with st.sidebar:
                             "cta_text": "Klik link w bio",
                         })
                     st.session_state.active_brand_id = bid
+                    _cached_brands.clear()  # invalidate cache po dodaniu marki
                     st.success(f"Utworzono: {new_name}")
                     st.rerun()
                 else:
@@ -207,7 +224,7 @@ with st.sidebar:
     # Cost ticker at the bottom
     st.markdown('<hr style="border-top:1px solid #EAE8F2;margin:1.1rem 0 0.85rem;">', unsafe_allow_html=True)
 
-    today_cost = get_today_total_cost()
+    today_cost = _cached_today_cost()
     from config import DAILY_COST_CAP_USD
     cost_pct = min(today_cost / DAILY_COST_CAP_USD, 1.0) if DAILY_COST_CAP_USD else 0.0
     cost_color = "#DC2626" if cost_pct > 0.8 else "#D97706" if cost_pct > 0.5 else "#059669"

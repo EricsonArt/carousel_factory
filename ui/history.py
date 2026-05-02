@@ -1,6 +1,7 @@
 """
 Historia wygenerowanych karuzel dla aktywnej marki.
 """
+import hashlib
 import json
 import threading
 import time
@@ -20,6 +21,36 @@ from config import PUBLER_API_KEY, PUBLER_WORKSPACE_ID
 from db import list_carousels, get_carousel, get_automation_config
 from ui.theme import page_header, section_title, empty_state
 from ui.generate import show_publer_section, _render_slide_regen_editor
+
+
+# ─────────────────────────────────────────────────────────────
+# CACHE POMOCNICZE — unikamy powtórnych operacji na dysku/PIL
+# ─────────────────────────────────────────────────────────────
+
+def _slides_hash(slides: list) -> str:
+    """Klucz cache'u: hash ścieżek obrazów. Zmiana slajdu = nowy hash = nowy ZIP."""
+    paths = "".join(s.get("image_path", "") for s in (slides or []))
+    return hashlib.md5(paths.encode()).hexdigest()[:12]
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _zip_bytes_cached(carousel_id: str, _slides_hash: str) -> tuple[bytes | None, str]:
+    """Generuje ZIP i zwraca bajty. Wynik cachowany 10 min — bust przy zmianie slajdów."""
+    try:
+        zip_path = export_carousel_as_zip(carousel_id)
+        return Path(zip_path).read_bytes(), ""
+    except Exception as e:
+        return None, str(e)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _broken_slides_cached(carousel_id: str, _slides_hash: str) -> list[int]:
+    """Skanuje PIL raz na 2 min. Bust przy zmianie slajdów."""
+    try:
+        carousel = get_carousel(carousel_id)
+        return get_broken_slide_indices(carousel, deep_scan=True) if carousel else []
+    except Exception:
+        return []
 
 
 _STATUS_COLORS = {
@@ -526,20 +557,18 @@ def render_history(brand_id: str):
             # Actions row: ZIP + Usuń
             col_a, col_del, col_spacer = st.columns([1, 1, 3])
             with col_a:
-                try:
-                    zip_path = export_carousel_as_zip(c["id"])
-                    with open(zip_path, "rb") as f:
-                        zip_bytes = f.read()
+                _zip_bytes, _zip_err = _zip_bytes_cached(c["id"], _slides_hash(slides))
+                if _zip_bytes:
                     st.download_button(
                         "⬇️ Pobierz ZIP",
-                        data=zip_bytes,
+                        data=_zip_bytes,
                         file_name=f"karuzela_{c['id']}.zip",
                         mime="application/zip",
                         key=f"dl_hist_{c['id']}",
                         use_container_width=True,
                     )
-                except Exception as e:
-                    st.error(f"Błąd ZIP: {str(e)[:80]}")
+                else:
+                    st.error(f"Błąd ZIP: {_zip_err[:80]}")
 
             with col_del:
                 _confirm_key = f"del_confirm_{c['id']}_{outer_idx}"
@@ -582,17 +611,16 @@ def render_history(brand_id: str):
                 )
 
             # ── Repair backgrounds (Gemini fallback recovery) ─────────────────
-            full_carousel = get_carousel(c["id"]) or c
-            # deep_scan=True: sprawdza tez pliki na dysku (low-variance = solid bg)
-            # Lapie stare karuzele ktore mialy wpisany provider 'gemini' ale faktyczny
-            # plik to gradient (race condition w starszej wersji kodu).
-            broken_idx = get_broken_slide_indices(full_carousel, deep_scan=True)
+            # Używamy `c` bezpośrednio (list_carousels robi SELECT * — te same dane)
+            # Wyniki broken-scan cachowane per-carousel, bust gdy zmienią się slajdy
+            _sh = _slides_hash(slides)
+            broken_idx = _broken_slides_cached(c["id"], _sh)
             n_broken = len(broken_idx)
-            n_total = len(full_carousel.get("slides") or [])
+            n_total = len(slides)
 
             # Debug: pokaz providerow dla kazdego slajdu (collapsed by default)
             with st.expander("🔍 Debug: providery slajdow", expanded=False):
-                slides_dbg = full_carousel.get("slides") or []
+                slides_dbg = slides
                 if not slides_dbg:
                     st.caption("Brak slajdow w bazie.")
                 else:
@@ -663,4 +691,4 @@ def render_history(brand_id: str):
 
             # Publer auto-publish section — same widget as in Generator
             st.markdown('<div style="margin-top:1rem;"></div>', unsafe_allow_html=True)
-            show_publer_section(full_carousel, key_suffix="hist")
+            show_publer_section(c, key_suffix="hist")

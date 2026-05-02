@@ -103,6 +103,9 @@ def _render_progress(brand_id: str):
         return
 
     status = job.get("status", "")
+    # Nie renderuj nic gdy job już skończony i wyniki pokazane — brak rerenderów
+    if status not in ("running",) and job.get("_results_shown"):
+        return
 
     if status == "running":
         st.markdown('<div style="margin-top:1rem;"></div>', unsafe_allow_html=True)

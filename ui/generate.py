@@ -325,7 +325,7 @@ def _run_publer_diagnostic():
 
 @st.fragment(run_every=2)
 def _render_jobs_panel(brand_id: str):
-    """Panel aktywnych i ukończonych jobów. Auto-refresh co 2s."""
+    """Panel aktywnych i ukończonych jobów. Auto-refresh co 2s tylko gdy coś działa."""
     jobs = _get_jobs()
     # Filtruj tylko joby tej marki
     brand_jobs = {k: v for k, v in jobs.items() if v.get("brand_id") == brand_id}
@@ -333,6 +333,9 @@ def _render_jobs_panel(brand_id: str):
         return
 
     running = [v for v in brand_jobs.values() if v["status"] == "running"]
+    # Jeśli nic nie działa — nie trzeba renderować panelu (oszczędza rerenders)
+    if not running and not any(v["status"] in ("done", "error") for v in brand_jobs.values()):
+        return
     done    = [v for v in brand_jobs.values() if v["status"] == "done"]
     errors  = [v for v in brand_jobs.values() if v["status"] == "error"]
 
