@@ -15,7 +15,7 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 from core.carousel_generator import (
     export_carousel_as_zip, repair_carousel_backgrounds, get_broken_slide_indices,
 )
-from core.bulk_reschedule import bulk_reschedule
+from core.bulk_reschedule import bulk_reschedule, delete_carousel_permanently
 from config import PUBLER_API_KEY, PUBLER_WORKSPACE_ID
 from db import list_carousels, get_carousel, get_automation_config
 from ui.theme import page_header, section_title, empty_state
@@ -523,8 +523,8 @@ def render_history(brand_id: str):
                     label_visibility="collapsed",
                 )
 
-            # Actions - direct download_button
-            col_a, col_b = st.columns([1, 4])
+            # Actions row: ZIP + Usuń
+            col_a, col_del, col_spacer = st.columns([1, 1, 3])
             with col_a:
                 try:
                     zip_path = export_carousel_as_zip(c["id"])
@@ -540,6 +540,46 @@ def render_history(brand_id: str):
                     )
                 except Exception as e:
                     st.error(f"Błąd ZIP: {str(e)[:80]}")
+
+            with col_del:
+                _confirm_key = f"del_confirm_{c['id']}_{outer_idx}"
+                if st.session_state.get(_confirm_key):
+                    # Stan potwierdzenia — pokaż czerwony przycisk
+                    if st.button(
+                        "⚠️ TAK, usuń na zawsze",
+                        key=f"del_yes_{c['id']}_{outer_idx}",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        with st.spinner("Usuwam..."):
+                            del_result = delete_carousel_permanently(
+                                c["id"],
+                                publer_api_key=PUBLER_API_KEY or "",
+                                publer_workspace_id=PUBLER_WORKSPACE_ID or "",
+                            )
+                        st.session_state.pop(_confirm_key, None)
+                        if del_result.get("ok"):
+                            publer_info = " + usunięto z Publer" if del_result.get("publer_deleted") else ""
+                            st.success(f"✅ Usunięto{publer_info}.")
+                            st.rerun()
+                        else:
+                            st.error(f"Błąd: {del_result.get('error','?')}")
+                else:
+                    if st.button(
+                        "🗑️ Usuń",
+                        key=f"del_btn_{c['id']}_{outer_idx}",
+                        use_container_width=True,
+                    ):
+                        st.session_state[_confirm_key] = True
+                        st.rerun()
+
+            # Informacja o stanie potwierdzenia pod przyciskami
+            if st.session_state.get(f"del_confirm_{c['id']}_{outer_idx}"):
+                st.warning(
+                    "⚠️ Permanentne usunięcie: karuzela zniknie z bazy danych, "
+                    "pliki obrazów zostaną usunięte z dysku, a post anulowany w Publerze. "
+                    "Kliknij **TAK, usuń na zawsze** żeby potwierdzić."
+                )
 
             # ── Repair backgrounds (Gemini fallback recovery) ─────────────────
             full_carousel = get_carousel(c["id"]) or c

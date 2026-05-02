@@ -526,6 +526,12 @@ def update_carousel(carousel_id: str, **fields):
         conn.execute(f"UPDATE carousels SET {cols} WHERE id = ?", vals)
 
 
+def delete_carousel(carousel_id: str):
+    """Permanentnie usuwa karuzelę z bazy danych."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM carousels WHERE id = ?", (carousel_id,))
+
+
 # ─────────────────────────────────────────────────────────────
 # USAGE TRACKING (image gen quotas)
 # ─────────────────────────────────────────────────────────────

@@ -13,7 +13,85 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from core.publisher_publer import PublerClient, PublerError
-from db import get_carousel, update_carousel
+from db import get_carousel, update_carousel, delete_carousel
+
+
+def delete_carousel_permanently(
+    carousel_id: str,
+    publer_api_key: str = "",
+    publer_workspace_id: str = "",
+) -> dict:
+    """
+    Permanentnie usuwa karuzelę:
+      1. Kasuje post w Publerze (jeśli istnieje publer_post_id)
+      2. Usuwa pliki obrazów z dysku
+      3. Usuwa rekord z bazy danych
+
+    Zwraca: {"ok": bool, "publer_deleted": bool, "files_deleted": int, "error": str|None}
+    """
+    import shutil
+    from pathlib import Path
+
+    carousel = get_carousel(carousel_id)
+    if not carousel:
+        return {"ok": False, "error": "Karuzela nie istnieje w bazie."}
+
+    result = {"ok": False, "publer_deleted": False, "files_deleted": 0, "error": None}
+
+    # 1. Usuń z Publer
+    post_id = (carousel.get("publer_post_id") or "").strip()
+    if post_id and publer_api_key:
+        try:
+            client = PublerClient(publer_api_key, publer_workspace_id)
+            if not publer_workspace_id:
+                try:
+                    ws = client.get_workspaces()
+                    if ws:
+                        client.set_workspace(str(ws[0].get("id", "")))
+                except PublerError:
+                    pass
+            client.delete_post(post_id)
+            result["publer_deleted"] = True
+        except PublerError as e:
+            msg = str(e).lower()
+            # 404 = już nie istnieje w Publerze — OK, kontynuuj
+            if "404" in msg or "not found" in msg:
+                result["publer_deleted"] = True
+            else:
+                result["error"] = f"Błąd Publer: {e}"
+                # Nie przerywamy — i tak usuwamy z DB i dysku
+
+    # 2. Usuń pliki z dysku
+    slides = carousel.get("slides") or []
+    deleted_files = 0
+    dirs_to_try: set = set()
+    for slide in slides:
+        path_str = slide.get("image_path") or ""
+        if not path_str:
+            continue
+        p = Path(path_str)
+        dirs_to_try.add(p.parent)
+        if p.exists():
+            try:
+                p.unlink()
+                deleted_files += 1
+            except OSError:
+                pass
+
+    # Usuń katalog karuzeli jeśli pusty
+    for d in dirs_to_try:
+        try:
+            if d.exists() and not any(d.iterdir()):
+                d.rmdir()
+        except OSError:
+            pass
+
+    result["files_deleted"] = deleted_files
+
+    # 3. Usuń z bazy danych
+    delete_carousel(carousel_id)
+    result["ok"] = True
+    return result
 
 
 def cancel_all_scheduled(
