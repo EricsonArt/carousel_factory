@@ -43,6 +43,42 @@ def _zip_bytes_cached(carousel_id: str, _slides_hash: str) -> tuple[bytes | None
         return None, str(e)
 
 
+_POLISH_CHARS = set("ąćęłńóśźżĄĆĘŁŃÓŚŹŻ")
+# Najczęstsze polskie słowa — te się NIE pojawiają po angielsku
+_POLISH_WORDS = {
+    "się", "nie", "jest", "tylko", "który", "która", "które", "tego", "tym",
+    "jak", "że", "dla", "ale", "więc", "jeszcze", "już", "tak", "wszystko",
+    "robić", "zrobić", "może", "musisz", "twoje", "twoja", "twój", "ciebie",
+    "mam", "masz", "ma", "są", "było", "będzie", "byłem", "była",
+    "moja", "moje", "mój", "nasze", "nasz", "wam", "wami", "ci",
+    "po", "od", "do", "we", "ze", "przed", "przez", "bez", "pod",
+    "tu", "tam", "to", "ta", "te", "ten",
+}
+
+
+def _detect_language(carousel: dict) -> str:
+    """Heurystyka: zwraca 'pl' albo 'en'. Sprawdza diakrytyki + częste słowa."""
+    text_parts = [carousel.get("caption") or ""]
+    for slide in (carousel.get("slides") or []):
+        text_parts.append(slide.get("headline") or "")
+        text_parts.append(slide.get("body") or "")
+    text = " ".join(text_parts).lower()
+
+    if not text.strip():
+        return "pl"  # default
+
+    # Szybka detekcja: polskie diakrytyki = 100% PL
+    if any(ch in _POLISH_CHARS for ch in text):
+        return "pl"
+
+    # Brak diakrytyków: sprawdź polskie słowa
+    words = set(text.split())
+    if words & _POLISH_WORDS:
+        return "pl"
+
+    return "en"
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def _broken_slides_cached(carousel_id: str, _slides_hash: str) -> list[int]:
     """Skanuje PIL raz na 2 min. Bust przy zmianie slajdów."""
@@ -465,85 +501,99 @@ def _start_repair_job(carousel_id: str) -> str:
 PAGE_SIZE = 10  # ile karuzel per strona — ogranicza DOM nodes
 
 
-def _render_delete_all_section(brand_id: str, count: int):
-    """Czerwona strefa: usuń wszystkie karuzele marki (baza + Publer + dysk)."""
-    if count == 0:
+def _render_delete_english_section(brand_id: str, carousels: list):
+    """
+    Pokazuje przycisk usuwający TYLKO karuzele po angielsku.
+    Polskie zostają nietknięte. Wykrywanie języka heurystyczne (diakrytyki + słowa).
+    """
+    english_carousels = [c for c in carousels if _detect_language(c) == "en"]
+    eng_count = len(english_carousels)
+    pl_count = len(carousels) - eng_count
+
+    if eng_count == 0:
         return
 
-    confirm_key = f"delete_all_confirm_{brand_id}"
+    confirm_key = f"delete_eng_confirm_{brand_id}"
     is_confirming = st.session_state.get(confirm_key, False)
 
-    with st.expander(f"🚨 Strefa zagrożenia — usuń wszystkie {count} karuzel", expanded=False):
-        st.markdown(
-            "<div style='color:#7C2D12;font-size:0.88rem;line-height:1.5;'>"
-            "<b>Permanentnie usuwa WSZYSTKIE karuzele tej marki:</b>"
-            "<ul style='margin:0.5rem 0 0.5rem 1.2rem;padding:0;'>"
-            "<li>Skasowane z bazy danych</li>"
-            "<li>Anulowane wszystkie posty zaplanowane w Publerze (nie pojawią się na IG/TikTok)</li>"
-            "<li>Pliki obrazów usunięte z dysku</li>"
-            "</ul>"
-            "<b>Nieodwracalne.</b></div>",
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        f"<div style='background:#FEF3C7;border:1px solid #FCD34D;border-radius:10px;"
+        f"padding:0.7rem 1rem;margin:0.6rem 0;font-size:0.88rem;color:#78350F;'>"
+        f"🌐 Wykryto <b>{eng_count}</b> karuzel po angielsku "
+        f"(polskie: {pl_count}). Możesz usunąć tylko te angielskie."
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
-        if not is_confirming:
+    if not is_confirming:
+        if st.button(
+            f"🗑️ Usuń wszystkie {eng_count} karuzel po angielsku (ENG)",
+            key=f"del_eng_btn_{brand_id}",
+            use_container_width=True,
+            help="Usuwa z bazy + anuluje w Publerze + kasuje pliki. Polskie karuzele zostają nietknięte.",
+        ):
+            st.session_state[confirm_key] = True
+            st.rerun()
+    else:
+        st.warning(
+            f"⚠️ Zaraz usuniesz **{eng_count} karuzel ENG** permanentnie "
+            f"(z Publera + bazy + dysku). Polskie ({pl_count}) zostają."
+        )
+        col_yes, col_no = st.columns(2)
+        with col_yes:
             if st.button(
-                f"🗑️ Usuń wszystkie {count} karuzel",
-                key=f"del_all_btn_{brand_id}",
+                "✓ TAK, usuń ENG",
+                key=f"del_eng_yes_{brand_id}",
+                type="primary",
                 use_container_width=True,
             ):
-                st.session_state[confirm_key] = True
-                st.rerun()
-        else:
-            st.warning(
-                f"⚠️ Zaraz usuniesz **{count} karuzel** permanentnie. "
-                "Są też anulowane wszystkie zaplanowane posty w Publerze."
-            )
-            col_yes, col_no = st.columns(2)
-            with col_yes:
-                if st.button(
-                    "✓ TAK, usuń wszystko",
-                    key=f"del_all_yes_{brand_id}",
-                    type="primary",
-                    use_container_width=True,
-                ):
-                    progress_placeholder = st.empty()
-
-                    def _cb(stage, pct):
-                        progress_placeholder.progress(
-                            max(0.02, min(1.0, pct)),
-                            text=stage,
-                        )
-
-                    result = delete_all_carousels(
-                        brand_id,
-                        publer_api_key=PUBLER_API_KEY or "",
-                        publer_workspace_id=PUBLER_WORKSPACE_ID or "",
-                        progress_callback=_cb,
+                progress = st.empty()
+                deleted = 0
+                publer_cancelled = 0
+                errors = 0
+                n = len(english_carousels)
+                for idx, c in enumerate(english_carousels):
+                    progress.progress(
+                        max(0.02, (idx + 1) / n),
+                        text=f"Usuwam {idx+1}/{n}: {c.get('caption','')[:40]}...",
                     )
-                    progress_placeholder.empty()
-                    st.session_state.pop(confirm_key, None)
-                    # Wyczyść caches żeby Historia od razu pokazała pusto
                     try:
-                        _zip_bytes_cached.clear()
-                        _broken_slides_cached.clear()
-                        _thumb_bytes_cached.clear()
+                        res = delete_carousel_permanently(
+                            c["id"],
+                            publer_api_key=PUBLER_API_KEY or "",
+                            publer_workspace_id=PUBLER_WORKSPACE_ID or "",
+                        )
+                        if res.get("ok"):
+                            deleted += 1
+                            if res.get("publer_deleted"):
+                                publer_cancelled += 1
+                        else:
+                            errors += 1
                     except Exception:
-                        pass
-                    st.success(
-                        f"✅ Usunięto **{result.get('deleted',0)}** karuzel "
-                        f"({result.get('publer_cancelled',0)} anulowanych w Publerze, "
-                        f"{result.get('errors',0)} błędów)."
-                    )
-                    st.rerun()
-            with col_no:
-                if st.button(
-                    "✗ Anuluj",
-                    key=f"del_all_no_{brand_id}",
-                    use_container_width=True,
-                ):
-                    st.session_state.pop(confirm_key, None)
-                    st.rerun()
+                        errors += 1
+
+                progress.empty()
+                st.session_state.pop(confirm_key, None)
+                try:
+                    _zip_bytes_cached.clear()
+                    _broken_slides_cached.clear()
+                    _thumb_bytes_cached.clear()
+                except Exception:
+                    pass
+                st.success(
+                    f"✅ Usunięto **{deleted}** karuzel ENG "
+                    f"({publer_cancelled} anulowanych w Publerze, {errors} błędów). "
+                    f"Polskie ({pl_count}) zostały nietknięte."
+                )
+                st.rerun()
+        with col_no:
+            if st.button(
+                "✗ Anuluj",
+                key=f"del_eng_no_{brand_id}",
+                use_container_width=True,
+            ):
+                st.session_state.pop(confirm_key, None)
+                st.rerun()
 
 
 def render_history(brand_id: str):
@@ -591,8 +641,8 @@ def render_history(brand_id: str):
     # ── Bulk Reschedule (przesuwa wiele naraz na nowe terminy) ──
     _render_bulk_reschedule_section(brand_id, carousels)
 
-    # ── DANGER ZONE: usuń wszystkie karuzele tej marki ──
-    _render_delete_all_section(brand_id, len(carousels))
+    # ── Usuń karuzele ENG (jeśli jakieś są) — polskie nietknięte ──
+    _render_delete_english_section(brand_id, carousels)
 
     section_title("Lista karuzel", icon="🗂️")
 
