@@ -53,6 +53,30 @@ def _broken_slides_cached(carousel_id: str, _slides_hash: str) -> list[int]:
         return []
 
 
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=500)
+def _thumb_bytes_cached(image_path: str, _mtime: float) -> bytes | None:
+    """
+    Resize obrazu do max 400px szerokości i zwraca bajty JPEG.
+    Cache klucz: ścieżka + mtime (zmiana pliku = nowy thumb).
+    Wygląd identyczny jak st.image(path) — tylko mniej danych do przeglądarki.
+    """
+    try:
+        from PIL import Image
+        import io
+        with Image.open(image_path) as img:
+            img = img.convert("RGB")
+            w, h = img.size
+            target_w = 400
+            if w > target_w:
+                new_h = int(h * target_w / w)
+                img = img.resize((target_w, new_h), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=82, optimize=True)
+            return buf.getvalue()
+    except Exception:
+        return None
+
+
 _STATUS_COLORS = {
     "draft":     ("#EDE9FE", "#7C3AED"),
     "scheduled": ("#FFFBEB", "#D97706"),
@@ -571,8 +595,14 @@ def render_history(brand_id: str):
                 for i, slide in enumerate(slides):
                     with thumb_cols[i % len(thumb_cols)]:
                         img_path = slide.get("image_path", "")
-                        if img_path and Path(img_path).exists():
-                            st.image(img_path, use_container_width=True)
+                        _img_p = Path(img_path) if img_path else None
+                        if _img_p and _img_p.exists():
+                            # Cache resized thumbnail (~25KB JPEG zamiast 200KB+ PNG/base64)
+                            _thumb = _thumb_bytes_cached(str(_img_p), _img_p.stat().st_mtime)
+                            if _thumb:
+                                st.image(_thumb, use_container_width=True)
+                            else:
+                                st.image(img_path, use_container_width=True)
                         else:
                             st.markdown(f"""
                             <div style="background:#F5F3FF;border:1px dashed #DDD6FE;border-radius:8px;
