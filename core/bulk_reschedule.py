@@ -155,6 +155,87 @@ def delete_all_carousels(
     }
 
 
+def nuke_all_publer_scheduled(
+    publer_api_key: str,
+    publer_workspace_id: str = "",
+    progress_callback=None,
+) -> dict:
+    """
+    NUKE Publer: pobiera WSZYSTKIE zaplanowane posty bezpośrednio z API Publera
+    i kasuje je. Niezależne od bazy lokalnej — działa nawet gdy DB nie wie o postach
+    (np. zaplanowane przed integracją lub stracone publer_post_id).
+
+    Zwraca: {"found": int, "deleted": int, "errors": int, "details": [...]}
+    """
+    if not publer_api_key:
+        return {"found": 0, "deleted": 0, "errors": 0, "message": "Brak PUBLER_API_KEY"}
+
+    client = PublerClient(publer_api_key, publer_workspace_id)
+    if not publer_workspace_id:
+        try:
+            ws = client.get_workspaces()
+            if ws:
+                client.set_workspace(str(ws[0].get("id", "")))
+        except PublerError as e:
+            return {"found": 0, "deleted": 0, "errors": 1,
+                    "message": f"Błąd workspace: {e}"}
+
+    if progress_callback:
+        progress_callback("Pobieranie listy zaplanowanych postów...", 0.05)
+
+    try:
+        posts = client.list_scheduled_posts(limit=500)
+    except PublerError as e:
+        return {"found": 0, "deleted": 0, "errors": 1,
+                "message": f"Błąd listowania: {e}"}
+
+    if not posts:
+        return {"found": 0, "deleted": 0, "errors": 0,
+                "message": "Publer API nie zwrócił żadnych zaplanowanych postów."}
+
+    n = len(posts)
+    deleted = 0
+    errors = 0
+    details: list[str] = []
+
+    for i, post in enumerate(posts):
+        post_id = str(post.get("id") or post.get("_id") or "")
+        if not post_id:
+            errors += 1
+            details.append(f"❌ post bez ID: {post}")
+            continue
+
+        text_preview = (post.get("text") or post.get("caption") or "")[:50]
+        if progress_callback:
+            progress_callback(
+                f"Anuluję {i+1}/{n}: {text_preview}...",
+                0.05 + 0.9 * (i / max(n, 1)),
+            )
+
+        try:
+            client.delete_post(post_id)
+            deleted += 1
+            details.append(f"✅ {post_id[:12]} — {text_preview}")
+        except PublerError as e:
+            msg = str(e).lower()
+            if "404" in msg or "not found" in msg:
+                deleted += 1
+                details.append(f"⏭ {post_id[:12]} — już nie istnieje")
+            else:
+                errors += 1
+                details.append(f"❌ {post_id[:12]} — {e}")
+
+    if progress_callback:
+        progress_callback("Gotowe", 1.0)
+
+    return {
+        "found": n,
+        "deleted": deleted,
+        "errors": errors,
+        "details": details,
+    }
+
+
 def cancel_all_scheduled(
     brand_id: str,
     publer_api_key: str,

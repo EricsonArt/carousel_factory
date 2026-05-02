@@ -16,7 +16,10 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 from core.carousel_generator import (
     export_carousel_as_zip, repair_carousel_backgrounds, get_broken_slide_indices,
 )
-from core.bulk_reschedule import bulk_reschedule, delete_carousel_permanently, delete_all_carousels
+from core.bulk_reschedule import (
+    bulk_reschedule, delete_carousel_permanently, delete_all_carousels,
+    nuke_all_publer_scheduled,
+)
 from config import PUBLER_API_KEY, PUBLER_WORKSPACE_ID
 from db import list_carousels, get_carousel, get_automation_config
 from ui.theme import page_header, section_title, empty_state
@@ -691,11 +694,71 @@ def _render_delete_section(brand_id: str, carousels: list):
 
             st.markdown('<div style="margin:0.7rem 0;"></div>', unsafe_allow_html=True)
 
-        # ── OPCJA 2: wszystkie ──
+        # ── OPCJA: NUKE Publer (anuluje WSZYSTKO bezpośrednio przez Publer API) ──
+        st.markdown(
+            "<div style='background:#FEF2F2;border:1px solid #FCA5A5;border-radius:10px;"
+            "padding:0.7rem 1rem;margin:0.4rem 0;font-size:0.88rem;color:#7F1D1D;'>"
+            "🌐 <b>Anuluj WSZYSTKIE posty w Publer</b> — pobiera listę zaplanowanych "
+            "postów bezpośrednio z Publer API i kasuje je, nawet jeśli nie ma ich "
+            "w naszej bazie. <b>Użyj gdy Publer pokazuje posty których nasz system "
+            "już nie zna</b> (np. zostały po starych usunięciach)."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        confirm_nuke_key = f"nuke_publer_confirm_{brand_id}"
+        is_confirming_nuke = st.session_state.get(confirm_nuke_key, False)
+        if not is_confirming_nuke:
+            if st.button(
+                "🌐 Anuluj WSZYSTKIE posty w Publer (NUKE)",
+                key=f"nuke_publer_btn_{brand_id}",
+                use_container_width=True,
+                disabled=not PUBLER_API_KEY,
+                help="Wymaga PUBLER_API_KEY w secrets" if not PUBLER_API_KEY else None,
+            ):
+                st.session_state[confirm_nuke_key] = True
+                st.rerun()
+        else:
+            st.error("⚠️ Zaraz anuluję **WSZYSTKIE zaplanowane posty w Publer**.")
+            col_y, col_n = st.columns(2)
+            with col_y:
+                if st.button("✓ TAK, NUKE Publer", key=f"nuke_publer_yes_{brand_id}",
+                               type="primary", use_container_width=True):
+                    progress = st.empty()
+
+                    def _cb(stage, pct):
+                        progress.progress(max(0.02, min(1.0, pct)), text=stage)
+
+                    res = nuke_all_publer_scheduled(
+                        publer_api_key=PUBLER_API_KEY or "",
+                        publer_workspace_id=PUBLER_WORKSPACE_ID or "",
+                        progress_callback=_cb,
+                    )
+                    progress.empty()
+                    st.session_state.pop(confirm_nuke_key, None)
+                    if res.get("message"):
+                        st.warning(res["message"])
+                    st.success(
+                        f"🌐 Publer NUKE: znaleziono **{res.get('found',0)}**, "
+                        f"anulowano **{res.get('deleted',0)}**, błędów {res.get('errors',0)}."
+                    )
+                    if res.get("details"):
+                        with st.expander("Szczegóły"):
+                            for d in res["details"][:50]:
+                                st.text(d)
+                    st.rerun()
+            with col_n:
+                if st.button("✗ Anuluj", key=f"nuke_publer_no_{brand_id}",
+                               use_container_width=True):
+                    st.session_state.pop(confirm_nuke_key, None)
+                    st.rerun()
+
+        st.markdown('<div style="margin:0.7rem 0;"></div>', unsafe_allow_html=True)
+
+        # ── OPCJA 2: wszystkie z bazy ──
         st.markdown(
             f"<div style='background:#FEE2E2;border:1px solid #FCA5A5;border-radius:10px;"
             f"padding:0.7rem 1rem;margin:0.4rem 0;font-size:0.88rem;color:#7F1D1D;'>"
-            f"🚨 Usuń <b>WSZYSTKIE {total}</b> karuzel (też polskie) — anuluje posty Publera "
+            f"🚨 Usuń <b>WSZYSTKIE {total}</b> karuzel z bazy (też polskie) — anuluje posty Publera "
             f"i kasuje pliki z dysku. Nieodwracalne."
             f"</div>",
             unsafe_allow_html=True,

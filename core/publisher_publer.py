@@ -223,6 +223,32 @@ class PublerClient:
         self._raise(resp)
         return True
 
+    def list_scheduled_posts(self, limit: int = 200) -> list[dict]:
+        """
+        Lista zaplanowanych postów w workspace. Próbuje kilku endpointów Publera
+        bo dokumentacja niespójna: /posts?state=scheduled, /posts/scheduled, itp.
+        Zwraca listę dict-ów z polami {id, text, scheduled_at, ...}.
+        """
+        for path, params in [
+            ("/posts", {"state": "scheduled", "limit": limit}),
+            ("/posts/scheduled", {"limit": limit}),
+            ("/posts", {"status": "scheduled", "limit": limit}),
+            ("/posts", {"limit": limit}),
+        ]:
+            try:
+                resp = self._session.get(
+                    f"{PUBLER_BASE}{path}",
+                    params=params,
+                    timeout=20,
+                )
+                if resp.ok:
+                    posts = self._list(resp.json())
+                    if posts:
+                        return posts
+            except Exception:
+                continue
+        return []
+
     # ── Helpers ──────────────────────────────────────────────────────────────
 
     @staticmethod
