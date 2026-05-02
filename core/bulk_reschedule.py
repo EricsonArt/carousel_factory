@@ -94,6 +94,67 @@ def delete_carousel_permanently(
     return result
 
 
+def delete_all_carousels(
+    brand_id: str,
+    publer_api_key: str = "",
+    publer_workspace_id: str = "",
+    progress_callback=None,
+) -> dict:
+    """
+    NUKE: usuwa WSZYSTKIE karuzele marki — z bazy, z dysku i z Publera.
+    Nieodwracalne.
+
+    Zwraca: {"deleted": int, "publer_cancelled": int, "errors": int, "details": [...]}
+    """
+    from db import list_carousels
+
+    carousels = list_carousels(brand_id, limit=1000)
+    if not carousels:
+        return {"deleted": 0, "publer_cancelled": 0, "errors": 0, "details": [],
+                "message": "Brak karuzel do usunięcia."}
+
+    deleted = 0
+    publer_cancelled = 0
+    errors = 0
+    details: list[str] = []
+    n = len(carousels)
+
+    for i, c in enumerate(carousels):
+        cid = c["id"]
+        if progress_callback:
+            progress_callback(f"Usuwam {i+1}/{n}: {cid[:8]}...", i / n)
+
+        try:
+            res = delete_carousel_permanently(
+                cid,
+                publer_api_key=publer_api_key,
+                publer_workspace_id=publer_workspace_id,
+            )
+            if res.get("ok"):
+                deleted += 1
+                if res.get("publer_deleted"):
+                    publer_cancelled += 1
+                details.append(f"✅ {cid[:8]} usunięty"
+                                + (" + Publer" if res.get("publer_deleted") else ""))
+            else:
+                errors += 1
+                details.append(f"❌ {cid[:8]}: {res.get('error', '?')}")
+        except Exception as e:
+            errors += 1
+            details.append(f"❌ {cid[:8]}: {e}")
+
+    if progress_callback:
+        progress_callback("Gotowe", 1.0)
+
+    return {
+        "deleted": deleted,
+        "publer_cancelled": publer_cancelled,
+        "errors": errors,
+        "details": details,
+        "total_before": n,
+    }
+
+
 def cancel_all_scheduled(
     brand_id: str,
     publer_api_key: str,

@@ -16,7 +16,7 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 from core.carousel_generator import (
     export_carousel_as_zip, repair_carousel_backgrounds, get_broken_slide_indices,
 )
-from core.bulk_reschedule import bulk_reschedule, delete_carousel_permanently
+from core.bulk_reschedule import bulk_reschedule, delete_carousel_permanently, delete_all_carousels
 from config import PUBLER_API_KEY, PUBLER_WORKSPACE_ID
 from db import list_carousels, get_carousel, get_automation_config
 from ui.theme import page_header, section_title, empty_state
@@ -465,6 +465,87 @@ def _start_repair_job(carousel_id: str) -> str:
 PAGE_SIZE = 10  # ile karuzel per strona — ogranicza DOM nodes
 
 
+def _render_delete_all_section(brand_id: str, count: int):
+    """Czerwona strefa: usuń wszystkie karuzele marki (baza + Publer + dysk)."""
+    if count == 0:
+        return
+
+    confirm_key = f"delete_all_confirm_{brand_id}"
+    is_confirming = st.session_state.get(confirm_key, False)
+
+    with st.expander(f"🚨 Strefa zagrożenia — usuń wszystkie {count} karuzel", expanded=False):
+        st.markdown(
+            "<div style='color:#7C2D12;font-size:0.88rem;line-height:1.5;'>"
+            "<b>Permanentnie usuwa WSZYSTKIE karuzele tej marki:</b>"
+            "<ul style='margin:0.5rem 0 0.5rem 1.2rem;padding:0;'>"
+            "<li>Skasowane z bazy danych</li>"
+            "<li>Anulowane wszystkie posty zaplanowane w Publerze (nie pojawią się na IG/TikTok)</li>"
+            "<li>Pliki obrazów usunięte z dysku</li>"
+            "</ul>"
+            "<b>Nieodwracalne.</b></div>",
+            unsafe_allow_html=True,
+        )
+
+        if not is_confirming:
+            if st.button(
+                f"🗑️ Usuń wszystkie {count} karuzel",
+                key=f"del_all_btn_{brand_id}",
+                use_container_width=True,
+            ):
+                st.session_state[confirm_key] = True
+                st.rerun()
+        else:
+            st.warning(
+                f"⚠️ Zaraz usuniesz **{count} karuzel** permanentnie. "
+                "Są też anulowane wszystkie zaplanowane posty w Publerze."
+            )
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button(
+                    "✓ TAK, usuń wszystko",
+                    key=f"del_all_yes_{brand_id}",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    progress_placeholder = st.empty()
+
+                    def _cb(stage, pct):
+                        progress_placeholder.progress(
+                            max(0.02, min(1.0, pct)),
+                            text=stage,
+                        )
+
+                    result = delete_all_carousels(
+                        brand_id,
+                        publer_api_key=PUBLER_API_KEY or "",
+                        publer_workspace_id=PUBLER_WORKSPACE_ID or "",
+                        progress_callback=_cb,
+                    )
+                    progress_placeholder.empty()
+                    st.session_state.pop(confirm_key, None)
+                    # Wyczyść caches żeby Historia od razu pokazała pusto
+                    try:
+                        _zip_bytes_cached.clear()
+                        _broken_slides_cached.clear()
+                        _thumb_bytes_cached.clear()
+                    except Exception:
+                        pass
+                    st.success(
+                        f"✅ Usunięto **{result.get('deleted',0)}** karuzel "
+                        f"({result.get('publer_cancelled',0)} anulowanych w Publerze, "
+                        f"{result.get('errors',0)} błędów)."
+                    )
+                    st.rerun()
+            with col_no:
+                if st.button(
+                    "✗ Anuluj",
+                    key=f"del_all_no_{brand_id}",
+                    use_container_width=True,
+                ):
+                    st.session_state.pop(confirm_key, None)
+                    st.rerun()
+
+
 def render_history(brand_id: str):
     page_header(
         "Historia karuzel",
@@ -509,6 +590,9 @@ def render_history(brand_id: str):
 
     # ── Bulk Reschedule (przesuwa wiele naraz na nowe terminy) ──
     _render_bulk_reschedule_section(brand_id, carousels)
+
+    # ── DANGER ZONE: usuń wszystkie karuzele tej marki ──
+    _render_delete_all_section(brand_id, len(carousels))
 
     section_title("Lista karuzel", icon="🗂️")
 
@@ -569,7 +653,7 @@ def render_history(brand_id: str):
         _del_confirm_key = f"del_confirm_{c['id']}_{outer_idx}"
         _is_confirming = st.session_state.get(_del_confirm_key, False)
 
-        col_hdr, col_del_inline = st.columns([10, 1.4])
+        col_hdr, col_del_inline = st.columns([4, 1])
         with col_hdr:
             if st.button(
                 header_label,
@@ -581,7 +665,7 @@ def render_history(brand_id: str):
         with col_del_inline:
             if _is_confirming:
                 if st.button(
-                    "✓ TAK",
+                    "✓ TAK, usuń",
                     key=f"del_yes_inline_{c['id']}_{outer_idx}",
                     type="primary",
                     use_container_width=True,
