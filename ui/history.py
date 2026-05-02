@@ -44,39 +44,92 @@ def _zip_bytes_cached(carousel_id: str, _slides_hash: str) -> tuple[bytes | None
 
 
 _POLISH_CHARS = set("ąćęłńóśźżĄĆĘŁŃÓŚŹŻ")
-# Najczęstsze polskie słowa — te się NIE pojawiają po angielsku
+
+# Częste polskie słowa unikalne dla PL (nie występują po angielsku)
 _POLISH_WORDS = {
     "się", "nie", "jest", "tylko", "który", "która", "które", "tego", "tym",
     "jak", "że", "dla", "ale", "więc", "jeszcze", "już", "tak", "wszystko",
     "robić", "zrobić", "może", "musisz", "twoje", "twoja", "twój", "ciebie",
     "mam", "masz", "ma", "są", "było", "będzie", "byłem", "była",
-    "moja", "moje", "mój", "nasze", "nasz", "wam", "wami", "ci",
-    "po", "od", "do", "we", "ze", "przed", "przez", "bez", "pod",
-    "tu", "tam", "to", "ta", "te", "ten",
+    "moja", "moje", "mój", "nasze", "nasz", "wam", "wami",
+    "od", "ze", "przed", "przez", "bez", "pod",
+    "tam", "ta", "te", "ten", "czy", "dlaczego", "kiedy", "gdzie",
+    "wszyscy", "każdy", "nikt", "ktoś", "coś", "nigdy", "zawsze",
+    "ludzie", "rzeczy", "pieniądze", "czas", "życie", "praca",
+    "więcej", "mniej", "naprawdę", "jednak", "natomiast",
+    "powiem", "mówię", "wiem", "wiesz", "myślisz", "myślę", "robisz", "robię",
+    "możesz", "mogę", "musisz", "muszę", "potrafisz",
+    "bo", "albo", "chyba", "raczej", "także", "również",
+}
+
+# Częste angielskie słowa (function words) — silne sygnały EN
+_ENGLISH_WORDS = {
+    "the", "you", "your", "yours", "this", "that", "these", "those",
+    "with", "and", "for", "from", "into", "about", "without",
+    "are", "have", "has", "had", "was", "were", "will", "would", "should", "could",
+    "what", "when", "where", "how", "why", "who", "which", "whose",
+    "all", "any", "some", "every", "many", "much", "most", "more", "less",
+    "but", "not", "they", "them", "their", "there", "here",
+    "make", "made", "get", "got", "stop", "start", "want", "need", "know",
+    "people", "thing", "things", "money", "time", "way", "day", "life", "work",
+    "i", "me", "my", "we", "us", "our", "she", "her", "he", "him", "his", "it", "its",
+    "is", "be", "been", "being", "am",
+    "do", "does", "did", "done", "doing",
+    "can", "may", "must", "shall",
+    "than", "very", "really", "just", "only", "also", "too", "even", "still",
+    "if", "then", "else", "because", "since", "while", "until", "though",
+    "first", "second", "next", "last", "after", "before",
+    "good", "better", "best", "bad", "worse", "worst", "great", "amazing",
+    "always", "never", "often", "sometimes",
+    "everyone", "someone", "anyone", "nobody", "everything", "something",
 }
 
 
 def _detect_language(carousel: dict) -> str:
-    """Heurystyka: zwraca 'pl' albo 'en'. Sprawdza diakrytyki + częste słowa."""
-    text_parts = [carousel.get("caption") or ""]
+    """
+    Score-based detekcja PL/EN.
+    Sprawdza tylko CONTENT slajdów (headline + body), nie caption (mix language).
+    Manual override przez session_state['lang_override_<id>'].
+    """
+    # Manual override jeśli user kliknął flagę
+    try:
+        import streamlit as _st
+        override = _st.session_state.get(f"lang_override_{carousel.get('id','')}")
+        if override in ("pl", "en"):
+            return override
+    except Exception:
+        pass
+
+    text_parts = []
     for slide in (carousel.get("slides") or []):
         text_parts.append(slide.get("headline") or "")
         text_parts.append(slide.get("body") or "")
+    if not any(p.strip() for p in text_parts):
+        text_parts.append(carousel.get("caption") or "")
     text = " ".join(text_parts).lower()
 
     if not text.strip():
         return "pl"  # default
 
-    # Szybka detekcja: polskie diakrytyki = 100% PL
-    if any(ch in _POLISH_CHARS for ch in text):
+    # Liczenia
+    diak_count = sum(1 for ch in text if ch in _POLISH_CHARS)
+
+    import re
+    words = re.findall(r"[a-ząćęłńóśźż]+", text)
+    word_set = set(words)
+    pl_word_count = len(word_set & _POLISH_WORDS)
+    en_word_count = len(word_set & _ENGLISH_WORDS)
+
+    # Score: diakrytyk=2, polskie słowo=3, angielskie słowo=3
+    # Dodatkowo: jeśli >5 polskich diakrytyków, prawie na pewno PL
+    pl_score = diak_count * 2 + pl_word_count * 3
+    en_score = en_word_count * 3
+
+    # Hard rule: dużo diakrytyków = PL (np. ą/ę/ś/ć w treści)
+    if diak_count >= 3:
         return "pl"
 
-    # Brak diakrytyków: sprawdź polskie słowa
-    words = set(text.split())
-    if words & _POLISH_WORDS:
-        return "pl"
-
-    return "en"
+    return "en" if en_score > pl_score else "pl"
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -552,11 +605,16 @@ def _render_delete_section(brand_id: str, carousels: list):
                 f"☑️ Zaznacz wszystkie ENG ({eng_count})",
                 key=f"sel_all_eng_{brand_id}",
                 use_container_width=True,
-                disabled=eng_count == 0,
             ):
-                for c in english_carousels:
-                    selected.add(c["id"])
-                st.rerun()
+                if eng_count == 0:
+                    st.info(
+                        "Heurystyka nie wykryła angielskich karuzel. "
+                        "Kliknij flagę 🇵🇱 obok karuzeli żeby ręcznie oznaczyć ją jako ENG."
+                    )
+                else:
+                    for c in english_carousels:
+                        selected.add(c["id"])
+                    st.rerun()
         with col_btn2:
             if st.button(
                 "☐ Odznacz wszystko",
@@ -804,20 +862,20 @@ def render_history(brand_id: str):
         caption_short = "–" if not c.get("caption") else c["caption"][:50] + "..."
         chevron = "▼" if is_expanded else "▶"
 
-        # Wykryj język i pokaż flagę
+        # Wykryj język + pozwól usera ręcznie zmienić
         lang = _detect_language(c)
-        flag = "🇬🇧" if lang == "en" else "🇵🇱"
+        flag = "🇬🇧 EN" if lang == "en" else "🇵🇱 PL"
 
-        # Header: checkbox + klik rozwija/zwija + zawsze-widoczny przycisk usuwania
+        # Header: checkbox + flaga (klikalna, toggle) + tytuł + delete
         header_label = (
-            f"{chevron}  {flag}  {created}  ·  "
+            f"{chevron}  {created}  ·  "
             f"{status.upper()}  ·  "
             f"{len(slides)} slajdów  ·  {caption_short}"
         )
         _del_confirm_key = f"del_confirm_{c['id']}_{outer_idx}"
         _is_confirming = st.session_state.get(_del_confirm_key, False)
 
-        col_chk, col_hdr, col_del_inline = st.columns([0.4, 4, 1])
+        col_chk, col_flag, col_hdr, col_del_inline = st.columns([0.4, 0.7, 4, 1])
         with col_chk:
             checked = st.checkbox(
                 "zaznacz",
@@ -829,6 +887,17 @@ def render_history(brand_id: str):
                 selected_set.add(c["id"])
             else:
                 selected_set.discard(c["id"])
+        with col_flag:
+            # Klik przełącza język (manual override) — gdy heurystyka się myli
+            if st.button(
+                flag,
+                key=f"flag_{c['id']}_{outer_idx}",
+                use_container_width=True,
+                help="Kliknij aby zmienić wykryty język (PL ↔ EN)",
+            ):
+                new_lang = "en" if lang == "pl" else "pl"
+                st.session_state[f"lang_override_{c['id']}"] = new_lang
+                st.rerun()
         with col_hdr:
             if st.button(
                 header_label,
