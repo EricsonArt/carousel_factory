@@ -501,9 +501,17 @@ def _start_repair_job(carousel_id: str) -> str:
 PAGE_SIZE = 10  # ile karuzel per strona — ogranicza DOM nodes
 
 
+_SELECTED_KEY_PREFIX = "hist_selected_"
+
+
+def _get_selected_set(brand_id: str) -> set:
+    """Zwraca set ID zaznaczonych karuzel dla danej marki (z session_state)."""
+    return st.session_state.setdefault(f"{_SELECTED_KEY_PREFIX}{brand_id}", set())
+
+
 def _render_delete_section(brand_id: str, carousels: list):
     """
-    Sekcja usuwania zbiorczego: ENG-only jeśli są angielskie + opcja Wszystkie.
+    Sekcja usuwania zbiorczego: zaznaczanie + ENG-only + Wszystkie.
     """
     total = len(carousels)
     if total == 0:
@@ -513,12 +521,82 @@ def _render_delete_section(brand_id: str, carousels: list):
     eng_count = len(english_carousels)
     pl_count = total - eng_count
 
+    selected = _get_selected_set(brand_id)
     confirm_eng_key = f"delete_eng_confirm_{brand_id}"
     confirm_all_key = f"delete_all_confirm_{brand_id}"
+    confirm_sel_key = f"delete_sel_confirm_{brand_id}"
     is_confirming_eng = st.session_state.get(confirm_eng_key, False)
     is_confirming_all = st.session_state.get(confirm_all_key, False)
+    is_confirming_sel = st.session_state.get(confirm_sel_key, False)
 
-    with st.expander(f"🗑️ Usuń karuzele ({total} łącznie · 🇵🇱 {pl_count} · 🇬🇧 {eng_count})", expanded=False):
+    with st.expander(
+        f"🗑️ Usuń karuzele ({total} łącznie · 🇵🇱 {pl_count} · 🇬🇧 {eng_count} · "
+        f"zaznaczone: {len(selected)})",
+        expanded=False,
+    ):
+
+        # ── OPCJA 0: zaznaczanie ręczne ──
+        st.markdown(
+            "<div style='background:#EFF6FF;border:1px solid #BFDBFE;border-radius:10px;"
+            "padding:0.7rem 1rem;margin:0.4rem 0;font-size:0.88rem;color:#1E40AF;'>"
+            "✅ <b>Zaznaczanie ręczne:</b> obok każdej karuzeli na liście jest checkbox. "
+            "Zaznacz te które chcesz usunąć (sprawdź flagę 🇵🇱/🇬🇧 przy karuzeli) "
+            "i kliknij przycisk poniżej."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        with col_btn1:
+            if st.button(
+                f"☑️ Zaznacz wszystkie ENG ({eng_count})",
+                key=f"sel_all_eng_{brand_id}",
+                use_container_width=True,
+                disabled=eng_count == 0,
+            ):
+                for c in english_carousels:
+                    selected.add(c["id"])
+                st.rerun()
+        with col_btn2:
+            if st.button(
+                "☐ Odznacz wszystko",
+                key=f"unsel_all_{brand_id}",
+                use_container_width=True,
+                disabled=len(selected) == 0,
+            ):
+                selected.clear()
+                st.rerun()
+        with col_btn3:
+            if not is_confirming_sel:
+                if st.button(
+                    f"🗑️ Usuń zaznaczone ({len(selected)})",
+                    key=f"del_sel_btn_{brand_id}",
+                    use_container_width=True,
+                    type="primary",
+                    disabled=len(selected) == 0,
+                ):
+                    st.session_state[confirm_sel_key] = True
+                    st.rerun()
+            else:
+                if st.button(
+                    f"✓ TAK ({len(selected)})",
+                    key=f"del_sel_yes_{brand_id}",
+                    use_container_width=True,
+                    type="primary",
+                ):
+                    to_delete = [c for c in carousels if c["id"] in selected]
+                    _run_bulk_delete(to_delete)
+                    selected.clear()
+                    st.session_state.pop(confirm_sel_key, None)
+                    st.rerun()
+
+        if is_confirming_sel:
+            st.warning(
+                f"⚠️ Zaraz usuniesz **{len(selected)} zaznaczonych karuzel** permanentnie. "
+                "Kliknij ✓ TAK aby potwierdzić."
+            )
+
+        st.markdown('<hr style="margin:0.8rem 0;border-top:1px solid #E5E7EB;">', unsafe_allow_html=True)
 
         # ── OPCJA 1: tylko ENG (jeśli są) ──
         if eng_count > 0:
@@ -709,6 +787,7 @@ def render_history(brand_id: str):
                 st.rerun()
 
     page_carousels = carousels[current_page * PAGE_SIZE:(current_page + 1) * PAGE_SIZE]
+    selected_set = _get_selected_set(brand_id)
 
     for outer_idx, c in enumerate(page_carousels):
         status = c.get("status", "draft")
@@ -725,16 +804,31 @@ def render_history(brand_id: str):
         caption_short = "–" if not c.get("caption") else c["caption"][:50] + "..."
         chevron = "▼" if is_expanded else "▶"
 
-        # Header: klik rozwija/zwija + zawsze-widoczny przycisk usuwania obok
+        # Wykryj język i pokaż flagę
+        lang = _detect_language(c)
+        flag = "🇬🇧" if lang == "en" else "🇵🇱"
+
+        # Header: checkbox + klik rozwija/zwija + zawsze-widoczny przycisk usuwania
         header_label = (
-            f"{chevron}  {created}  ·  "
+            f"{chevron}  {flag}  {created}  ·  "
             f"{status.upper()}  ·  "
             f"{len(slides)} slajdów  ·  {caption_short}"
         )
         _del_confirm_key = f"del_confirm_{c['id']}_{outer_idx}"
         _is_confirming = st.session_state.get(_del_confirm_key, False)
 
-        col_hdr, col_del_inline = st.columns([4, 1])
+        col_chk, col_hdr, col_del_inline = st.columns([0.4, 4, 1])
+        with col_chk:
+            checked = st.checkbox(
+                "zaznacz",
+                value=c["id"] in selected_set,
+                key=f"chk_{c['id']}_{outer_idx}",
+                label_visibility="collapsed",
+            )
+            if checked:
+                selected_set.add(c["id"])
+            else:
+                selected_set.discard(c["id"])
         with col_hdr:
             if st.button(
                 header_label,
