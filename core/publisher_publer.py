@@ -223,30 +223,71 @@ class PublerClient:
         self._raise(resp)
         return True
 
-    def list_scheduled_posts(self, limit: int = 200) -> list[dict]:
+    def list_scheduled_posts(self, limit: int = 200, debug: bool = False) -> list[dict]:
         """
-        Lista zaplanowanych postów w workspace. Próbuje kilku endpointów Publera
-        bo dokumentacja niespójna: /posts?state=scheduled, /posts/scheduled, itp.
-        Zwraca listę dict-ów z polami {id, text, scheduled_at, ...}.
+        Lista zaplanowanych postów w workspace.
+        Próbuje wielu endpointów + filtruje client-side po state (jeśli zwrócony).
+        debug=True → print każdego prawda response do konsoli.
         """
-        for path, params in [
+        all_posts: list[dict] = []
+        seen_ids: set = set()
+        tried: list[str] = []
+
+        # Pełna lista kombinacji endpointów + parametrów
+        candidates = [
             ("/posts", {"state": "scheduled", "limit": limit}),
+            ("/posts", {"state": "scheduled", "per_page": limit}),
             ("/posts/scheduled", {"limit": limit}),
+            ("/posts/scheduled", {}),
             ("/posts", {"status": "scheduled", "limit": limit}),
+            ("/posts", {"state": "queue", "limit": limit}),
+            ("/posts", {"state": "draft", "limit": limit}),
             ("/posts", {"limit": limit}),
-        ]:
+            ("/posts", {"per_page": limit}),
+            ("/posts", {}),
+            ("/me/posts", {"state": "scheduled", "limit": limit}),
+        ]
+
+        for path, params in candidates:
+            label = f"{path}?{params}"
             try:
                 resp = self._session.get(
                     f"{PUBLER_BASE}{path}",
                     params=params,
                     timeout=20,
                 )
-                if resp.ok:
-                    posts = self._list(resp.json())
-                    if posts:
-                        return posts
-            except Exception:
+                tried.append(f"{label} -> {resp.status_code}")
+                if debug:
+                    snippet = resp.text[:300]
+                    print(f"[PUBLER DEBUG] {label} status={resp.status_code} body={snippet}")
+                if not resp.ok:
+                    continue
+                try:
+                    data = resp.json()
+                except Exception:
+                    continue
+                items = self._list(data)
+                for it in items:
+                    pid = str(it.get("id") or it.get("_id") or "")
+                    if pid and pid not in seen_ids:
+                        seen_ids.add(pid)
+                        all_posts.append(it)
+            except Exception as e:
+                tried.append(f"{label} -> EXC {e}")
                 continue
+
+        # Filtruj client-side gdy mamy posty z różnymi statusami
+        if all_posts:
+            scheduled_only = [
+                p for p in all_posts
+                if (str(p.get("state") or p.get("status") or "").lower()
+                    in ("scheduled", "queued", "queue", "draft", "pending"))
+            ]
+            # Jeśli filtr coś znalazł — zwróć tylko te. Inaczej zwróć wszystko (lepsze niż pusto).
+            return scheduled_only if scheduled_only else all_posts
+
+        # Zapisz diagnostykę do atrybutu żeby UI mógł pokazać
+        self._last_list_diagnostics = tried
         return []
 
     # ── Helpers ──────────────────────────────────────────────────────────────

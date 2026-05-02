@@ -162,36 +162,69 @@ def nuke_all_publer_scheduled(
 ) -> dict:
     """
     NUKE Publer: pobiera WSZYSTKIE zaplanowane posty bezpośrednio z API Publera
-    i kasuje je. Niezależne od bazy lokalnej — działa nawet gdy DB nie wie o postach
-    (np. zaplanowane przed integracją lub stracone publer_post_id).
+    i kasuje je. Niezależne od bazy lokalnej.
 
-    Zwraca: {"found": int, "deleted": int, "errors": int, "details": [...]}
+    Zwraca: {"found": int, "deleted": int, "errors": int, "details": [...],
+              "diagnostics": [...]}
     """
     if not publer_api_key:
-        return {"found": 0, "deleted": 0, "errors": 0, "message": "Brak PUBLER_API_KEY"}
+        return {"found": 0, "deleted": 0, "errors": 0,
+                "message": "Brak PUBLER_API_KEY w secrets / .env"}
 
     client = PublerClient(publer_api_key, publer_workspace_id)
+    diagnostics: list[str] = []
+
+    # Test 1: workspaces
+    workspace_label = "?"
     if not publer_workspace_id:
         try:
             ws = client.get_workspaces()
+            diagnostics.append(f"✓ workspaces OK ({len(ws)} found)")
             if ws:
-                client.set_workspace(str(ws[0].get("id", "")))
+                wid = str(ws[0].get("id", ""))
+                client.set_workspace(wid)
+                workspace_label = ws[0].get("name", wid)
+                diagnostics.append(f"✓ używam workspace: {workspace_label} ({wid})")
         except PublerError as e:
+            diagnostics.append(f"❌ /workspaces: {e}")
             return {"found": 0, "deleted": 0, "errors": 1,
-                    "message": f"Błąd workspace: {e}"}
+                    "message": f"Błąd workspace: {e}",
+                    "diagnostics": diagnostics}
+    else:
+        diagnostics.append(f"✓ użyto workspace_id z config: {publer_workspace_id}")
+
+    # Test 2: accounts (czy klucz w ogóle działa)
+    try:
+        accounts = client.get_accounts()
+        diagnostics.append(f"✓ accounts OK ({len(accounts)} kont)")
+    except PublerError as e:
+        diagnostics.append(f"❌ /accounts: {e}")
 
     if progress_callback:
         progress_callback("Pobieranie listy zaplanowanych postów...", 0.05)
 
+    # Test 3: list scheduled
     try:
         posts = client.list_scheduled_posts(limit=500)
+        diag = getattr(client, "_last_list_diagnostics", [])
+        diagnostics.extend([f"  {d}" for d in diag])
     except PublerError as e:
+        diagnostics.append(f"❌ list_scheduled_posts: {e}")
         return {"found": 0, "deleted": 0, "errors": 1,
-                "message": f"Błąd listowania: {e}"}
+                "message": f"Błąd listowania: {e}",
+                "diagnostics": diagnostics}
 
     if not posts:
+        diagnostics.append("⚠️ Wszystkie endpointy zwróciły pustą listę albo 404")
         return {"found": 0, "deleted": 0, "errors": 0,
-                "message": "Publer API nie zwrócił żadnych zaplanowanych postów."}
+                "message": ("Publer API nie zwrócił żadnych postów. "
+                           "Możliwe: (1) klucz API ma tylko prawa write, nie read; "
+                           "(2) Publer zmienił endpointy; "
+                           "(3) faktycznie nic nie ma. "
+                           "Sprawdź szczegóły poniżej."),
+                "diagnostics": diagnostics}
+
+    diagnostics.append(f"✓ Znaleziono {len(posts)} postów do usunięcia")
 
     n = len(posts)
     deleted = 0
@@ -233,6 +266,7 @@ def nuke_all_publer_scheduled(
         "deleted": deleted,
         "errors": errors,
         "details": details,
+        "diagnostics": diagnostics,
     }
 
 

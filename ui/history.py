@@ -735,17 +735,31 @@ def _render_delete_section(brand_id: str, carousels: list):
                     )
                     progress.empty()
                     st.session_state.pop(confirm_nuke_key, None)
-                    if res.get("message"):
-                        st.warning(res["message"])
-                    st.success(
-                        f"🌐 Publer NUKE: znaleziono **{res.get('found',0)}**, "
-                        f"anulowano **{res.get('deleted',0)}**, błędów {res.get('errors',0)}."
-                    )
+
+                    found = res.get("found", 0)
+                    deleted = res.get("deleted", 0)
+                    errors = res.get("errors", 0)
+
+                    if found == 0:
+                        st.error(f"🌐 NIC NIE ZNALEZIONO. {res.get('message','')}")
+                    else:
+                        st.success(
+                            f"🌐 Publer NUKE: znaleziono **{found}**, "
+                            f"anulowano **{deleted}**, błędów {errors}."
+                        )
+
+                    # ZAWSZE pokaż diagnostykę żeby user widział co się stało
+                    if res.get("diagnostics"):
+                        with st.expander("🔍 Diagnostyka Publer API (rozwiń żeby zobaczyć)", expanded=(found == 0)):
+                            for d in res["diagnostics"]:
+                                st.text(d)
                     if res.get("details"):
-                        with st.expander("Szczegóły"):
+                        with st.expander("Szczegóły usuwania"):
                             for d in res["details"][:50]:
                                 st.text(d)
-                    st.rerun()
+                    # Nie rerun gdy 0 znaleziono — żeby user mógł przeczytać diagnostykę
+                    if found > 0 and deleted > 0:
+                        st.rerun()
             with col_n:
                 if st.button("✗ Anuluj", key=f"nuke_publer_no_{brand_id}",
                                use_container_width=True):
