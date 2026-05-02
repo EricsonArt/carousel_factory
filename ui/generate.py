@@ -1470,17 +1470,24 @@ def _render_viral_replicator_section(brand_id: str, brief: dict, styles: list):
                 v_style_id = None
                 st.caption("Brak stylów — replika użyje generycznego.")
 
-        # Generator obrazów — uproszczony wybór (Nano Banana Pro / gradient fallback)
-        from config import GEMINI_API_KEYS as _gk
-        v_use_ai = bool(_gk)
-        if v_use_ai:
-            st.caption("🟢 Tła nowych slajdów: **Nano Banana Pro** (Gemini 3 Pro Image, GRATIS)")
-            v_prefer = "gemini"
-            v_model = "gemini-3-pro-image-preview"
-        else:
-            st.caption("⚠️ Brak klucza Gemini — slajdy dostaną gradient z palety stylu.")
-            v_prefer = None
-            v_model = None
+        # Generator obrazów — pełny picker (taki sam jak w Generatorze i Automacie)
+        from ui.model_picker import get_image_model_options, resolve_image_model
+        _v_img_options = get_image_model_options()
+        v_img_mode = st.selectbox(
+            "🖼️ Generator tła slajdów",
+            options=list(_v_img_options.keys()),
+            format_func=lambda k: _v_img_options[k],
+            index=0,
+            key="viral_img_mode",
+            help=(
+                "Nano Banana Pro to najlepszy darmowy model do replikacji stylu z viralu. "
+                "GPT Image 2 lepszy dla zdjęć produktów ze sklepu. "
+                "Gradient = fallback gdy nic innego nie działa."
+            ),
+        )
+        v_use_ai, v_prefer, v_model, v_quality = resolve_image_model(v_img_mode)
+        if not v_use_ai:
+            st.caption("⚠️ Bez AI — slajdy dostaną gradient z palety stylu.")
 
         # Tryb wizualny: kopiuj styl tekstu z viralu zamiast uzywac stylu marki
         v_clone_visual = st.checkbox(
@@ -1540,7 +1547,7 @@ def _render_viral_replicator_section(brand_id: str, brief: dict, styles: list):
             "style_id": v_style_id,
             "use_ai_images": v_use_ai,
             "prefer_provider": v_prefer,
-            "image_quality": "low",
+            "image_quality": v_quality,
             "model_override": v_model,
             "language": v_language,
             "text_settings": st.session_state.get("generate_text_settings"),

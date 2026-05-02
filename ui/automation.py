@@ -17,21 +17,7 @@ from ui.text_settings import render_text_settings_panel
 
 
 # ─────────────────────────────────────────────────────────────
-# MODEL OPTIONS
-# ─────────────────────────────────────────────────────────────
-
-_MODEL_PARAMS = {
-    "nano_banana_pro": ("gemini", "gemini-3-pro-image-preview", "low"),
-    "nano_banana_2":   ("gemini", "gemini-3.1-flash-image-preview", "low"),
-    "gradient":        (None, None, "low"),
-}
-_MODEL_LABELS = {
-    "nano_banana_pro": "🟢 Nano Banana Pro (Gemini 3) — TOP JAKOŚĆ, GRATIS",
-    "nano_banana_2":   "🟢 Nano Banana 2 (Gemini 3.1 Flash) — szybsze, GRATIS",
-    "gradient":        "⚠️ Gradient z palety (bez AI — brak klucza Gemini)",
-}
-
-
+# Model picker — patrz ui/model_picker.py (wspólny z Generatorem i Viral Replicatorem)
 # ─────────────────────────────────────────────────────────────
 # JOB STATE
 # ─────────────────────────────────────────────────────────────
@@ -298,17 +284,14 @@ def render_automation(brand_id: str):
             style_id = None
             st.caption("Brak stylów — dodaj w zakładce 🎨 Style.")
 
-    # Model
-    from config import GEMINI_API_KEYS as _gemini_keys
-    has_gemini = bool(_gemini_keys)
+    # Model — wspólny picker z Generatorem i Viral Replicatorem
+    from ui.model_picker import get_image_model_options, resolve_image_model
+    available_models = get_image_model_options()
 
-    available_models: dict[str, str] = {}
-    if has_gemini:
-        available_models["nano_banana_pro"] = _MODEL_LABELS["nano_banana_pro"]
-        available_models["nano_banana_2"] = _MODEL_LABELS["nano_banana_2"]
-    available_models["gradient"] = _MODEL_LABELS["gradient"]
-
+    # Mapowanie starych kluczy z DB na nowe (back-compat)
+    _legacy_map = {"gradient": "none"}
     saved_model = auto_cfg.get("auto_model") or "nano_banana_pro"
+    saved_model = _legacy_map.get(saved_model, saved_model)
     if saved_model not in available_models:
         saved_model = next(iter(available_models))
 
@@ -319,7 +302,7 @@ def render_automation(brand_id: str):
         index=list(available_models.keys()).index(saved_model),
         disabled=is_running,
     )
-    prefer_provider, model_override, image_quality = _MODEL_PARAMS.get(selected_model, (None, None, "low"))
+    _use_ai, prefer_provider, model_override, image_quality = resolve_image_model(selected_model)
 
     # Panel stylu tekstu — pre-wypelniony z brief.text_settings, override per-batch
     st.markdown('<div style="margin-top:0.6rem;"></div>', unsafe_allow_html=True)
